@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { getCurrentSession } from "@/lib/auth";
 import { generateUploadName } from "@/lib/id";
+import { uploadObject } from "@/lib/storage/r2";
 import { ALLOWED_IMAGE_MIME, MAX_UPLOAD_BYTES } from "@capture/shared";
 import { logger } from "@/lib/logger";
 
@@ -35,19 +34,22 @@ export async function POST(req: Request) {
     );
   }
   if (file.size > MAX_UPLOAD_BYTES) {
-    return NextResponse.json(
-      { error: "Ukuran file melebihi 5MB" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Ukuran file melebihi 5MB" }, { status: 400 });
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const filename = generateUploadName("png");
-  const targetDir = path.join(process.cwd(), "public", "uploads", type);
-  await mkdir(targetDir, { recursive: true });
-  await writeFile(path.join(targetDir, filename), buffer);
+  // Frame assets live under frames/{uuid}.png in R2 (and locally in mock mode).
+  // We use a folder per type for browseability rather than per frame ID, since
+  // the form uploads happen *before* the frame row exists.
+  const key = `${type}/${filename}`;
 
-  const url = `/uploads/${type}/${filename}`;
-  logger.info("upload_saved", { type, url, size: file.size });
-  return NextResponse.json({ url });
+  const result = await uploadObject({
+    key,
+    body: buffer,
+    contentType: "image/png",
+  });
+
+  logger.info("upload_saved", { key, size: file.size, mock: result.mockMode });
+  return NextResponse.json({ url: result.url, key, mockMode: result.mockMode });
 }

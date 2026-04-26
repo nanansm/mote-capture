@@ -19,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatRupiah } from "@/lib/utils";
+import { displayUrl } from "@/lib/storage/r2-client";
 
 export function FrameList({
   frames,
@@ -82,7 +83,7 @@ export function FrameList({
               <TableCell>
                 {f.previewUrl ? (
                   <div className="relative h-12 w-12 overflow-hidden rounded-md border bg-muted">
-                    <Image src={f.previewUrl} alt={f.name} fill className="object-cover" sizes="48px" />
+                    <Image src={displayUrl(f.previewUrl)} alt={f.name} fill className="object-cover" sizes="48px" unoptimized />
                   </div>
                 ) : (
                   <div className="h-12 w-12 rounded-md border bg-muted" />

@@ -34,12 +34,12 @@ const PRIMARY_NAV: NavItem[] = [
 ];
 
 const SECONDARY_NAV: NavItem[] = [
-  { label: "Sessions", href: "/admin/sessions", icon: Receipt, comingSoon: true },
-  { label: "Payments", href: "/admin/payments", icon: Receipt, comingSoon: true },
-  { label: "WhatsApp", href: "/admin/whatsapp", icon: MessageSquare, comingSoon: true },
+  { label: "Sessions", href: "/admin/sessions", icon: Receipt },
+  { label: "Payments", href: "/admin/payments", icon: Receipt },
+  { label: "WhatsApp", href: "/admin/whatsapp", icon: MessageSquare },
+  { label: "Settings", href: "/admin/settings", icon: Cog },
   { label: "Reports", href: "/admin/reports", icon: PieChart, comingSoon: true },
   { label: "Customers", href: "/admin/customers", icon: Users, comingSoon: true },
-  { label: "Settings", href: "/admin/settings", icon: Cog, comingSoon: true },
 ];
 
 export function Sidebar({
@@ -164,7 +164,7 @@ export function Sidebar({
           <div className="space-y-1">{PRIMARY_NAV.map(renderItem)}</div>
 
           <div className="mt-6 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Coming Soon
+            Operasional
           </div>
           <div className="mt-2 space-y-1">{SECONDARY_NAV.map(renderItem)}</div>
         </nav>

@@ -44,6 +44,19 @@ function bufToBase64Url(buf: Uint8Array): string {
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // Public routes that must skip the admin auth check entirely.
+  if (
+    pathname.startsWith("/share") ||
+    pathname.startsWith("/api/share") ||
+    pathname.startsWith("/api/webhook") ||
+    pathname.startsWith("/api/bridge") ||
+    pathname === "/api/session" ||
+    /^\/api\/session\/[^/]+\/(photos|composite)$/.test(pathname)
+  ) {
+    return NextResponse.next();
+  }
+
   if (!pathname.startsWith("/admin")) {
     return NextResponse.next();
   }
@@ -68,3 +81,4 @@ export async function middleware(req: NextRequest) {
 export const config = {
   matcher: ["/admin/:path*"],
 };
+

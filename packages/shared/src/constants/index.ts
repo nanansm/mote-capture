@@ -7,13 +7,27 @@ export const FRAME_TIERS: Record<FrameTier, { label: string; defaultPrice: numbe
 
 export const SESSION_STATUS: Record<SessionStatus, string> = {
   idle: "Idle",
-  awaiting_payment: "Menunggu Pembayaran",
+  payment: "Menunggu Pembayaran",
   paid: "Sudah Dibayar",
   capturing: "Sedang Foto",
-  printing: "Sedang Cetak",
-  completed: "Selesai",
+  processing: "Memproses",
+  done: "Selesai",
   expired: "Kedaluwarsa",
   failed: "Gagal",
+};
+
+export const SESSION_STATUS_VARIANT: Record<
+  SessionStatus,
+  "default" | "secondary" | "warn" | "success" | "destructive"
+> = {
+  idle: "secondary",
+  payment: "secondary",
+  paid: "warn",
+  capturing: "warn",
+  processing: "warn",
+  done: "success",
+  expired: "destructive",
+  failed: "destructive",
 };
 
 export const PAYMENT_PROVIDERS = [

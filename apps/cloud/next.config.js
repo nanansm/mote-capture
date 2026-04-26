@@ -33,16 +33,25 @@ function loadRootEnv() {
 loadRootEnv();
 
 const nextConfig = {
-  output: "standalone",
-  outputFileTracingRoot: path.join(__dirname, "../../"),
-  reactStrictMode: true,
-  images: {
-    remotePatterns: [],
+  output: 'standalone',
+  experimental: { 
+    outputFileTracingRoot: require('path').join(__dirname, '../../') 
   },
-  experimental: {
-    serverActions: {
-      bodySizeLimit: "10mb",
-    },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'pub-d4004dfc83f343ce9b93ca2e148620cd.r2.dev',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.r2.dev',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.r2.cloudflarestorage.com',
+      },
+    ],
   },
 };
 

@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { frameInputSchema } from "@/lib/validations/frame";
+import { displayUrl } from "@/lib/storage/r2-client";
 
 type Mode = "create" | "edit";
 
@@ -245,7 +246,7 @@ export function FrameForm({
               {backgroundUrl ? (
                 <div className="flex items-center gap-3">
                   <div className="relative h-16 w-16 overflow-hidden rounded-md border bg-muted">
-                    <Image src={backgroundUrl} alt="Background" fill className="object-cover" sizes="64px" />
+                    <Image src={displayUrl(backgroundUrl)} alt="Background" fill className="object-cover" sizes="64px" unoptimized />
                   </div>
                   <span className="break-all font-mono text-xs text-muted-foreground">{backgroundUrl}</span>
                 </div>
@@ -274,7 +275,7 @@ export function FrameForm({
               {logoUrl ? (
                 <div className="flex items-center gap-3">
                   <div className="relative h-12 w-12 overflow-hidden rounded-md border bg-muted">
-                    <Image src={logoUrl} alt="Logo" fill className="object-contain" sizes="48px" />
+                    <Image src={displayUrl(logoUrl)} alt="Logo" fill className="object-contain" sizes="48px" unoptimized />
                   </div>
                   <Button type="button" variant="ghost" size="sm" onClick={() => setLogoUrl("")}>
                     Hapus

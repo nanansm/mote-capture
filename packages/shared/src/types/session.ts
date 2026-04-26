@@ -1,10 +1,10 @@
 export type SessionStatus =
   | "idle"
-  | "awaiting_payment"
+  | "payment"
   | "paid"
   | "capturing"
-  | "printing"
-  | "completed"
+  | "processing"
+  | "done"
   | "expired"
   | "failed";
 
@@ -27,4 +27,13 @@ export type Session = {
   metadata: Record<string, unknown>;
   createdAt: Date;
   expiredAt: Date | null;
+};
+
+export type Photo = {
+  id: string;
+  sessionId: string;
+  url: string;
+  isFinal: boolean;
+  sortOrder: number;
+  createdAt: Date;
 };

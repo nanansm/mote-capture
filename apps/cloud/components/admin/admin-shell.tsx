@@ -14,6 +14,7 @@ const TITLE_MAP: Record<string, string> = {
   "/admin/frames/new": "Frame Baru",
   "/admin/sessions": "Sessions",
   "/admin/payments": "Payments",
+  "/admin/payments/transactions": "Payment Transactions",
   "/admin/whatsapp": "WhatsApp",
   "/admin/reports": "Reports",
   "/admin/customers": "Customers",
@@ -24,6 +25,7 @@ function deriveTitle(pathname: string): string {
   if (TITLE_MAP[pathname]) return TITLE_MAP[pathname];
   if (pathname.startsWith("/admin/booths/")) return "Edit Booth";
   if (pathname.startsWith("/admin/frames/")) return "Edit Frame";
+  if (pathname.startsWith("/admin/sessions/")) return "Detail Session";
   return "Admin";
 }
 

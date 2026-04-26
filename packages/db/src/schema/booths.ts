@@ -13,6 +13,7 @@ export const booths = captureSchema.table("booths", {
   isActive: boolean("is_active").notNull().default(true),
   lastSeenAt: timestamp("last_seen_at"),
   metadata: jsonb("metadata").default(sql`'{}'::jsonb`),
+  paymentCredentials: jsonb("payment_credentials").default(sql`'{}'::jsonb`),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
