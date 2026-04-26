@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
-import { emitToBooth } from "@/lib/socket/server";
+import { getIo } from "@/lib/socket/server";
 import { runMockBridgeForSession } from "@/lib/kiosk/mock-bridge";
 import { SocketEvents } from "@capture/shared";
 import { logger } from "@/lib/logger";
@@ -46,7 +46,12 @@ export async function POST(_req: Request, { params }: Ctx) {
   if (useMock) {
     void runMockBridgeForSession({ sessionId: id, boothId: session.boothId });
   } else {
-    emitToBooth(session.boothId, SocketEvents.BRIDGE_CAPTURE, { sessionId: id });
+    // Real bridge — send to bridge room only (not the kiosk room).
+    const io = getIo();
+    io?.to(`bridge:${session.boothId}`).emit(SocketEvents.BRIDGE_CAPTURE, {
+      sessionId: id,
+      photoIndex: 1,
+    });
   }
 
   logger.info("session_start_capture", { sessionId: id, mock: useMock });

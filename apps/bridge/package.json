@@ -1,0 +1,49 @@
+{
+  "name": "bridge",
+  "productName": "mote-capture-bridge",
+  "version": "0.1.0",
+  "description": "Mote Capture Bridge — desktop hardware connector (camera + printer) for booth locations",
+  "main": "dist/main/index.js",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n vite,build,electron -c blue,magenta,green \"pnpm dev:renderer\" \"pnpm dev:main\" \"pnpm dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:main": "node build-main.cjs --watch",
+    "dev:electron": "wait-on http://localhost:5174 dist/main/index.js && cross-env NODE_ENV=development VITE_DEV_SERVER_URL=http://localhost:5174 electron .",
+    "build": "pnpm build:renderer && pnpm build:main",
+    "build:renderer": "vite build",
+    "build:main": "node build-main.cjs",
+    "start": "electron .",
+    "package:mac": "pnpm build && electron-builder --mac",
+    "package:win": "pnpm build && electron-builder --win",
+    "package:linux": "pnpm build && electron-builder --linux",
+    "type-check": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
+  },
+  "dependencies": {
+    "@capture/shared": "workspace:*",
+    "axios": "^1.7.9",
+    "electron-store": "^8.2.0",
+    "form-data": "^4.0.1",
+    "sharp": "^0.33.5",
+    "socket.io-client": "^4.8.1",
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "esbuild": "^0.24.0",
+    "electron": "^32.2.6",
+    "electron-builder": "^25.1.8",
+    "wait-on": "^8.0.1",
+    "react": "19.0.0-rc-66855b96-20241106",
+    "react-dom": "19.0.0-rc-66855b96-20241106",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

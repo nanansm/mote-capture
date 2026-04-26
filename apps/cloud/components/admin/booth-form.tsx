@@ -40,6 +40,9 @@ export function BoothForm({
   );
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
   const [bridgeToken, setBridgeToken] = useState(initial?.bridgeToken ?? "(otomatis dibuat saat simpan)");
+  const [useMockBridge, setUseMockBridge] = useState<boolean>(
+    ((initial?.metadata as Record<string, unknown> | undefined)?.use_mock_bridge as boolean | undefined) ?? true,
+  );
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -61,10 +64,14 @@ export function BoothForm({
     try {
       const url = mode === "create" ? "/api/booths" : `/api/booths/${initial!.id}`;
       const method = mode === "create" ? "POST" : "PATCH";
+      const body =
+        mode === "edit"
+          ? { ...parsed.data, useMockBridge }
+          : parsed.data;
       const res = await fetch(url, {
         method,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(parsed.data),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -174,6 +181,19 @@ export function BoothForm({
             </div>
             <Switch checked={isActive} onCheckedChange={setIsActive} />
           </div>
+
+          {mode === "edit" ? (
+            <div className="flex items-center justify-between rounded-md border border-input p-3">
+              <div>
+                <p className="text-sm font-medium">Use Mock Bridge</p>
+                <p className="text-xs text-muted-foreground">
+                  ON = simulasi capture/print di server (dev). OFF = pakai bridge Electron real
+                  yang terhubung. Pastikan bridge online sebelum mematikan ini.
+                </p>
+              </div>
+              <Switch checked={useMockBridge} onCheckedChange={setUseMockBridge} />
+            </div>
+          ) : null}
 
           <div className="grid gap-2">
             <Label htmlFor="bridgeToken">Bridge Token</Label>

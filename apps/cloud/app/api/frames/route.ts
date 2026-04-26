@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { desc } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { getCurrentSession } from "@/lib/auth";
-import { frameInputSchema } from "@/lib/validations/frame";
+import { DEFAULT_LAYOUT_B, frameInputSchema } from "@/lib/validations/frame";
 import { generateFrameId } from "@/lib/id";
 import { logger } from "@/lib/logger";
 
@@ -53,6 +53,7 @@ export async function POST(req: Request) {
       seasonStart: data.seasonStart ? new Date(data.seasonStart) : null,
       seasonEnd: data.seasonEnd ? new Date(data.seasonEnd) : null,
       sortOrder: data.sortOrder,
+      layoutJson: data.layoutJson ?? DEFAULT_LAYOUT_B,
     })
     .returning();
 

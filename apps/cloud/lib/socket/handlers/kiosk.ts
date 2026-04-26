@@ -118,8 +118,11 @@ export function registerKioskHandlers(
       // Schedule mock-bridge to drive capture/composite/print
       void runMockBridgeForSession({ sessionId, boothId });
     } else {
-      // Real bridge — emit event to bridge room
-      io.to(`bridge:${boothId}`).emit(SocketEvents.BRIDGE_CAPTURE, { sessionId });
+      // Real bridge — start the capture sequence at photoIndex 1.
+      io.to(`bridge:${boothId}`).emit(SocketEvents.BRIDGE_CAPTURE, {
+        sessionId,
+        photoIndex: 1,
+      });
     }
     ack?.({ ok: true, mockMode: useMock });
   });

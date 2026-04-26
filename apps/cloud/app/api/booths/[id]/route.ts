@@ -40,7 +40,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
       { status: 400 },
     );
   }
-  const { regenerateBridgeToken, ...rest } = parsed.data;
+  const { regenerateBridgeToken, useMockBridge, ...rest } = parsed.data;
 
   const updates: Partial<typeof schema.booths.$inferInsert> = {
     ...rest,
@@ -50,6 +50,21 @@ export async function PATCH(req: Request, { params }: Ctx) {
     updates.bridgeToken = generateBridgeToken();
   }
 
+  // useMockBridge is stored inside the booth metadata jsonb. We only patch the
+  // single key so other heartbeat-derived fields (camera/printer status) stay.
+  if (typeof useMockBridge === "boolean") {
+    const [existing] = await db
+      .select({ metadata: schema.booths.metadata })
+      .from(schema.booths)
+      .where(eq(schema.booths.id, id))
+      .limit(1);
+    const merged = {
+      ...(((existing?.metadata as Record<string, unknown> | null) ?? {})),
+      use_mock_bridge: useMockBridge,
+    };
+    updates.metadata = merged;
+  }
+
   const [updated] = await db
     .update(schema.booths)
     .set(updates)
@@ -57,7 +72,11 @@ export async function PATCH(req: Request, { params }: Ctx) {
     .returning();
 
   if (!updated) return NextResponse.json({ error: "Booth tidak ditemukan" }, { status: 404 });
-  logger.info("booth_updated", { id, regen: !!regenerateBridgeToken });
+  logger.info("booth_updated", {
+    id,
+    regen: !!regenerateBridgeToken,
+    useMockBridge: typeof useMockBridge === "boolean" ? useMockBridge : undefined,
+  });
   return NextResponse.json({ data: updated });
 }
 

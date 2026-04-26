@@ -1,17 +1,21 @@
 export type FrameTier = "regular" | "premium";
 
 export type FrameLayoutSlot = {
+  stripIndex: number;
   x: number;
   y: number;
   width: number;
   height: number;
+  photoIndex: number;
   rotation?: number;
 };
 
 export type FrameLayout = {
-  width?: number;
-  height?: number;
-  slots?: FrameLayoutSlot[];
+  canvasWidth?: number;
+  canvasHeight?: number;
+  photoSlots?: FrameLayoutSlot[];
+  stripCount?: number;
+  cutLineX?: number;
 };
 
 export type Frame = {

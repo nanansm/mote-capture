@@ -28,21 +28,31 @@ export function BoothLiveStatus({
   const [resetting, setResetting] = useState(false);
 
   const camera = useMemo(() => {
-    const c = (metadata?.camera ?? {}) as { connected?: boolean; model?: string };
-    return c;
+    const c = (metadata?.camera ?? {}) as {
+      connected?: boolean;
+      model?: string;
+      deviceName?: string;
+      mode?: string;
+      error?: string;
+    };
+    return { ...c, model: c.model ?? c.deviceName };
   }, [metadata]);
   const printer = useMemo(() => {
     const p = (metadata?.printer ?? {}) as {
       connected?: boolean;
       model?: string;
+      deviceName?: string;
+      mode?: string;
       paperRemaining?: number;
+      error?: string;
     };
-    return p;
+    return { ...p, model: p.model ?? p.deviceName };
   }, [metadata]);
 
   const connected = Boolean(live?.online ?? live?.bridgeOnline);
   const inSession = Boolean(live?.inSession);
   const sessionId = live?.activeSessionId;
+  const useMockBridge = (metadata?.use_mock_bridge as boolean | undefined) ?? true;
 
   async function handleForceReset() {
     if (!sessionId) {
@@ -95,6 +105,11 @@ export function BoothLiveStatus({
               Last seen {formatDate(lastSeenAt)}
             </span>
           ) : null}
+          {useMockBridge ? (
+            <Badge variant="outline">🧪 Mock Bridge</Badge>
+          ) : (
+            <Badge variant="warn">🔌 Real Bridge</Badge>
+          )}
         </div>
 
         <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -106,6 +121,12 @@ export function BoothLiveStatus({
             {camera?.model ? (
               <p className="text-xs text-muted-foreground">{camera.model}</p>
             ) : null}
+            {camera?.mode ? (
+              <p className="text-xs text-muted-foreground">mode: {camera.mode}</p>
+            ) : null}
+            {camera?.error ? (
+              <p className="text-xs text-destructive">{camera.error}</p>
+            ) : null}
           </div>
           <div className="rounded-md border border-input p-3">
             <p className="text-xs uppercase tracking-wider text-muted-foreground">Printer</p>
@@ -115,10 +136,16 @@ export function BoothLiveStatus({
             {printer?.model ? (
               <p className="text-xs text-muted-foreground">{printer.model}</p>
             ) : null}
+            {printer?.mode ? (
+              <p className="text-xs text-muted-foreground">mode: {printer.mode}</p>
+            ) : null}
             {typeof printer?.paperRemaining === "number" ? (
               <p className="text-xs text-muted-foreground">
                 Paper: {printer.paperRemaining}%
               </p>
+            ) : null}
+            {printer?.error ? (
+              <p className="text-xs text-destructive">{printer.error}</p>
             ) : null}
           </div>
         </div>

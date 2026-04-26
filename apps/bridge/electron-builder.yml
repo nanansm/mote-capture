@@ -1,0 +1,56 @@
+appId: com.motekreatif.capture.bridge
+productName: Mote Capture Bridge
+copyright: Copyright © 2026 Mote Kreatif
+
+directories:
+  output: dist-installer
+  buildResources: assets
+
+files:
+  - dist/**/*
+  - assets/**/*
+  - package.json
+  - "!**/*.map"
+
+asarUnpack:
+  - "**/node_modules/sharp/**/*"
+  - "**/node_modules/@img/**/*"
+
+mac:
+  category: public.app-category.photography
+  icon: assets/icon.png
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+win:
+  icon: assets/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+linux:
+  icon: assets/icon.png
+  target:
+    - AppImage
+    - deb
+  category: Photography
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Mote Capture Bridge

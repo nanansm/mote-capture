@@ -64,6 +64,13 @@ export function FrameForm({
   const [submitting, setSubmitting] = useState(false);
   const [uploadingBg, setUploadingBg] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [layoutOpen, setLayoutOpen] = useState(false);
+  const [layoutJsonText, setLayoutJsonText] = useState<string>(
+    initial?.layoutJson && Object.keys(initial.layoutJson).length > 0
+      ? JSON.stringify(initial.layoutJson, null, 2)
+      : "",
+  );
+  const [layoutError, setLayoutError] = useState<string | null>(null);
 
   function handleTierChange(v: "regular" | "premium") {
     setTier(v);
@@ -127,6 +134,18 @@ export function FrameForm({
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    let layoutJson: unknown = undefined;
+    if (layoutJsonText.trim()) {
+      try {
+        layoutJson = JSON.parse(layoutJsonText);
+        setLayoutError(null);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Invalid JSON";
+        setLayoutError(msg);
+        toast.error("Layout JSON tidak valid: " + msg);
+        return;
+      }
+    }
     const payload = {
       name: name.trim(),
       tier,
@@ -140,6 +159,7 @@ export function FrameForm({
       seasonStart: seasonStart || null,
       seasonEnd: seasonEnd || null,
       sortOrder: Number(sortOrder),
+      layoutJson,
     };
     const parsed = frameInputSchema.safeParse(payload);
     if (!parsed.success) {
@@ -320,6 +340,45 @@ export function FrameForm({
               </div>
               <Switch checked={isDefault} onCheckedChange={setIsDefault} />
             </div>
+          </div>
+
+          <div className="rounded-md border border-input p-3">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between text-left"
+              onClick={() => setLayoutOpen((v) => !v)}
+            >
+              <div>
+                <p className="text-sm font-medium">Layout Advanced (Bridge composer)</p>
+                <p className="text-xs text-muted-foreground">
+                  JSON kustom untuk composer bridge. Kosongkan untuk pakai Layout B default
+                  (1800×1200, 2 strip identik).
+                </p>
+              </div>
+              <span className="text-xs text-muted-foreground">{layoutOpen ? "Hide" : "Show"}</span>
+            </button>
+            {layoutOpen ? (
+              <div className="mt-3 grid gap-2">
+                <textarea
+                  className="min-h-[200px] w-full rounded-md border border-input p-2 font-mono text-xs"
+                  value={layoutJsonText}
+                  onChange={(e) => setLayoutJsonText(e.target.value)}
+                  placeholder={`{\n  "canvasWidth": 1800,\n  "canvasHeight": 1200,\n  "stripCount": 2,\n  "cutLineX": 900,\n  "photoSlots": [\n    { "stripIndex": 0, "x": 65, "y": 80, "width": 770, "height": 320, "photoIndex": 0 },\n    ...\n  ]\n}`}
+                  spellCheck={false}
+                />
+                {layoutError ? (
+                  <p className="text-xs text-destructive">{layoutError}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Schema: <code>canvasWidth</code>, <code>canvasHeight</code>,{" "}
+                    <code>stripCount</code>, <code>cutLineX</code>,{" "}
+                    <code>photoSlots[]</code> (each: <code>stripIndex</code>, <code>x</code>,{" "}
+                    <code>y</code>, <code>width</code>, <code>height</code>,{" "}
+                    <code>photoIndex</code>).
+                  </p>
+                )}
+              </div>
+            ) : null}
           </div>
 
           <div className="grid gap-4 sm:grid-cols-3">
