@@ -3,6 +3,8 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { getPaymentProvider } from "@/lib/payment";
 import { logger } from "@/lib/logger";
+import { emitToBooth, emitToAdmin } from "@/lib/socket/server";
+import { SocketEvents } from "@capture/shared";
 
 // PUBLIC endpoint — verified via x-callback-token header.
 export async function POST(req: Request) {
@@ -64,15 +66,27 @@ export async function POST(req: Request) {
       logger.info("xendit_webhook_duplicate", { sessionId, status: session.status });
       return NextResponse.json({ ok: true, duplicate: true });
     }
+    const paidAt = new Date();
     await db
       .update(schema.sessions)
-      .set({ status: "paid", paidAt: new Date() })
+      .set({ status: "paid", paidAt })
       .where(eq(schema.sessions.id, sessionId));
     await db.insert(schema.paymentLogs).values({
       sessionId,
       provider: "xendit",
       eventType: "paid",
       payload: verification.rawPayload as object,
+    });
+    emitToBooth(session.boothId, SocketEvents.PAYMENT_PAID, {
+      sessionId,
+      amount: session.amount,
+      paidAt: paidAt.toISOString(),
+    });
+    emitToAdmin(SocketEvents.ADMIN_SESSION_UPDATE, {
+      boothId: session.boothId,
+      sessionId,
+      status: "paid",
+      amount: session.amount,
     });
     logger.info("xendit_webhook_paid", { sessionId, amount: verification.amount });
     return NextResponse.json({ ok: true });
@@ -91,6 +105,7 @@ export async function POST(req: Request) {
       eventType: verification.event,
       payload: verification.rawPayload as object,
     });
+    emitToBooth(session.boothId, SocketEvents.PAYMENT_EXPIRED, { sessionId });
     return NextResponse.json({ ok: true });
   }
 

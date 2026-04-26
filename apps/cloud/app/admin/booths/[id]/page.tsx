@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { BoothForm } from "@/components/admin/booth-form";
+import { BoothLiveStatus } from "@/components/admin/booth-live-status";
+import { env } from "@/lib/env";
 import type { Booth } from "@capture/shared";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +41,12 @@ export default async function EditBoothPage({
         <h2 className="text-xl font-semibold text-brand-green-dark">Edit Booth</h2>
         <p className="text-sm text-muted-foreground">{booth.name}</p>
       </div>
+      <BoothLiveStatus
+        boothId={booth.id}
+        metadata={booth.metadata}
+        lastSeenAt={booth.lastSeenAt}
+        appUrl={env.NEXT_PUBLIC_APP_URL}
+      />
       <BoothForm mode="edit" initial={booth} />
     </div>
   );

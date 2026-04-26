@@ -18,11 +18,13 @@ import {
 } from "@/components/ui/table";
 import { Card } from "@/components/ui/card";
 import { formatRupiah, formatDate } from "@/lib/utils";
+import { useAdminBoothStatuses } from "@/lib/socket/use-admin-socket";
 
 export function BoothList({ booths }: { booths: Booth[] }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const liveStatuses = useAdminBoothStatuses();
 
   async function handleDelete(b: Booth) {
     if (!confirm(`Hapus booth "${b.name}"? Tindakan tidak bisa dibatalkan.`)) return;
@@ -65,12 +67,25 @@ export function BoothList({ booths }: { booths: Booth[] }) {
             <TableHead>Harga</TableHead>
             <TableHead className="hidden lg:table-cell">Provider</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>Live</TableHead>
             <TableHead className="hidden xl:table-cell">Dibuat</TableHead>
             <TableHead className="text-right">Aksi</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {booths.map((b) => (
+          {booths.map((b) => {
+            const live = liveStatuses[b.id];
+            const everSeen = b.lastSeenAt != null;
+            const liveBadge = !everSeen && !live ? (
+              <Badge variant="outline">⚪ Belum connect</Badge>
+            ) : live?.inSession ? (
+              <Badge variant="warn">🟡 Sesi Aktif</Badge>
+            ) : live?.online || live?.bridgeOnline ? (
+              <Badge variant="success">🟢 Online</Badge>
+            ) : (
+              <Badge variant="destructive">🔴 Offline</Badge>
+            );
+            return (
             <TableRow key={b.id}>
               <TableCell>
                 <div className="font-medium text-brand-green-dark">{b.name}</div>
@@ -86,6 +101,7 @@ export function BoothList({ booths }: { booths: Booth[] }) {
                   <Badge variant="secondary">Nonaktif</Badge>
                 )}
               </TableCell>
+              <TableCell>{liveBadge}</TableCell>
               <TableCell className="hidden xl:table-cell text-sm text-muted-foreground">
                 {formatDate(b.createdAt)}
               </TableCell>
@@ -108,7 +124,8 @@ export function BoothList({ booths }: { booths: Booth[] }) {
                 </div>
               </TableCell>
             </TableRow>
-          ))}
+            );
+          })}
         </TableBody>
       </Table>
     </Card>

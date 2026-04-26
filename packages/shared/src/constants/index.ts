@@ -37,3 +37,5 @@ export const PAYMENT_PROVIDERS = [
 
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
 export const ALLOWED_IMAGE_MIME = ["image/png"];
+
+export * from "./kiosk";

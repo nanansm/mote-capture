@@ -51,8 +51,11 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith("/api/share") ||
     pathname.startsWith("/api/webhook") ||
     pathname.startsWith("/api/bridge") ||
+    pathname.startsWith("/api/r2/") ||
+    pathname.startsWith("/api/kiosk/") ||
+    pathname.startsWith("/kiosk") ||
     pathname === "/api/session" ||
-    /^\/api\/session\/[^/]+\/(photos|composite)$/.test(pathname)
+    /^\/api\/session\/[^/]+\/(photos|composite|start-capture|contact)$/.test(pathname)
   ) {
     return NextResponse.next();
   }
