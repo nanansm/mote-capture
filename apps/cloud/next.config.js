@@ -33,10 +33,11 @@ function loadRootEnv() {
 loadRootEnv();
 
 const nextConfig = {
-  output: 'standalone',
-  experimental: { 
-    outputFileTracingRoot: require('path').join(__dirname, '../../') 
-  },
+  // Note: not using `output: 'standalone'` — production runs our custom
+  // server (server.ts) via tsx so Socket.io can attach to the same HTTP
+  // listener. `outputFileTracingRoot` keeps Next aware of the monorepo root
+  // so it traces workspace package files into the build output.
+  outputFileTracingRoot: require('path').join(__dirname, '../../'),
   images: {
     remotePatterns: [
       {

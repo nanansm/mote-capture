@@ -45,7 +45,7 @@ export function PilihFrameState({
             <p className="text-lg text-brand-green-dark/60">{t("kiosk.frame.empty")}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {frames.map((f, idx) => (
               <motion.button
                 key={f.id}
@@ -56,26 +56,36 @@ export function PilihFrameState({
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: idx * 0.04 }}
                 className={cn(
-                  "relative overflow-hidden rounded-2xl border-4 bg-white text-left shadow-md transition-shadow hover:shadow-xl",
+                  "group relative flex flex-col overflow-hidden rounded-2xl border-4 bg-white text-left shadow-md transition-shadow hover:shadow-xl",
                   f.tier === "premium"
                     ? "border-brand-orange"
                     : "border-brand-yellow",
                 )}
               >
-                <div className="relative aspect-[3/4] bg-muted">
-                  {f.previewUrl ? (
-                    <Image
-                      src={displayUrl(f.previewUrl)}
-                      alt={f.name}
-                      fill
-                      className="object-cover"
-                      sizes="(min-width: 1024px) 25vw, 50vw"
-                      unoptimized
-                    />
-                  ) : null}
+                {/* Landscape 4R frame is 1800×1200 = 3:2 ratio. Container
+                    matches the aspect, image inside uses object-contain with
+                    inner padding so branding ("MAJA PHOTOBOOTH") is never
+                    cropped at any breakpoint. */}
+                <div className="relative aspect-[3/2] w-full bg-brand-cream/60">
+                  <div className="absolute inset-2 sm:inset-3">
+                    {f.previewUrl ? (
+                      <Image
+                        src={displayUrl(f.previewUrl)}
+                        alt={f.name}
+                        fill
+                        className="object-contain"
+                        sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+                        unoptimized
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-brand-green-dark/40">
+                        no preview
+                      </div>
+                    )}
+                  </div>
                   <span
                     className={cn(
-                      "absolute right-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider",
+                      "absolute right-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider shadow-sm",
                       f.tier === "premium"
                         ? "bg-brand-orange text-white"
                         : "bg-brand-yellow text-brand-green-dark",
@@ -84,9 +94,9 @@ export function PilihFrameState({
                     {f.tier === "premium" ? t("kiosk.frame.premium") : t("kiosk.frame.regular")}
                   </span>
                 </div>
-                <div className="px-3 py-2">
-                  <p className="truncate text-sm font-semibold text-brand-green-dark">{f.name}</p>
-                  <p className="text-xs font-bold text-brand-green-dark/70">{formatRupiah(f.price)}</p>
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <p className="truncate text-base font-semibold text-brand-green-dark">{f.name}</p>
+                  <p className="shrink-0 text-sm font-bold text-brand-green-dark/80">{formatRupiah(f.price)}</p>
                 </div>
               </motion.button>
             ))}
