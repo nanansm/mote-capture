@@ -15,7 +15,8 @@
     "db:generate": "pnpm --filter @capture/db generate",
     "package:bridge:mac": "pnpm --filter bridge package:mac",
     "package:bridge:win": "pnpm --filter bridge package:win",
-    "package:bridge:linux": "pnpm --filter bridge package:linux"
+    "package:bridge:linux": "pnpm --filter bridge package:linux",
+    "build:installer:windows": "node scripts/build-installer.js"
   },
   "devDependencies": {
     "turbo": "^2.3.3",
