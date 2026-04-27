@@ -35,6 +35,7 @@ export class BridgeHandlers {
     this.camera = createCamera(deps.config.cameraMode, {
       deviceName: deps.config.cameraDeviceName,
       digiCamControlPath: deps.config.digiCamControlPath,
+      digiCamSessionFolder: deps.config.digiCamSessionFolder,
     });
     this.printer = createPrinter(deps.config.printerMode, {
       printerName: deps.config.printerName,
@@ -222,6 +223,7 @@ export class BridgeHandlers {
     this.camera = createCamera(config.cameraMode, {
       deviceName: config.cameraDeviceName,
       digiCamControlPath: config.digiCamControlPath,
+      digiCamSessionFolder: config.digiCamSessionFolder,
     });
     this.printer = createPrinter(config.printerMode, {
       printerName: config.printerName,

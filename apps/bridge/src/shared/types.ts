@@ -11,7 +11,12 @@ export type BridgeConfig = {
   cameraDeviceName?: string;
   printerMode: PrinterMode;
   printerName?: string;
+  // CameraControlRemoteCmd.exe path (NOT CameraControlCmd.exe - the latter
+  // hangs when invoked alongside an open digiCamControl GUI session).
   digiCamControlPath?: string;
+  // digiCamControl Session folder where freshly-captured JPGs land. Default:
+  // %USERPROFILE%\Pictures\digiCamControl\Session1
+  digiCamSessionFolder?: string;
   autoStart: boolean;
 };
 

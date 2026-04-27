@@ -18,6 +18,7 @@ export function CameraTab({
   const [mode, setMode] = useState<CameraMode>(config.cameraMode);
   const [deviceName, setDeviceName] = useState(config.cameraDeviceName ?? "");
   const [digicamPath, setDigicamPath] = useState(config.digiCamControlPath ?? "");
+  const [sessionFolder, setSessionFolder] = useState(config.digiCamSessionFolder ?? "");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<DeviceTestResult | null>(null);
 
@@ -29,6 +30,7 @@ export function CameraTab({
         cameraMode: mode,
         cameraDeviceName: deviceName.trim(),
         digiCamControlPath: digicamPath.trim(),
+        digiCamSessionFolder: sessionFolder.trim(),
       });
     } finally {
       setBusy(false);
@@ -77,13 +79,47 @@ export function CameraTab({
         ) : null}
 
         {mode === "digicamcontrol" ? (
-          <div className="col">
-            <label htmlFor="dpath">CameraControlCmd.exe path</label>
-            <input id="dpath" value={digicamPath} onChange={(e) => setDigicamPath(e.target.value)} />
-            <div className="muted">
-              Default: <code>C:\Program Files (x86)\digiCamControl\CameraControlCmd.exe</code>
+          <>
+            <div className="col">
+              <label htmlFor="dpath">CameraControlRemoteCmd.exe path</label>
+              <input
+                id="dpath"
+                value={digicamPath}
+                onChange={(e) => setDigicamPath(e.target.value)}
+                placeholder="C:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe"
+              />
+              <div className="muted">
+                Default: <code>C:\Program Files (x86)\digiCamControl\CameraControlRemoteCmd.exe</code>
+                <br />
+                <strong>Penting:</strong> harus pakai <code>CameraControlRemoteCmd.exe</code> (bukan{" "}
+                <code>CameraControlCmd.exe</code> yang lama — itu hang infinite saat GUI aktif).
+              </div>
             </div>
-          </div>
+
+            <div className="col">
+              <label htmlFor="dsess">Session folder</label>
+              <input
+                id="dsess"
+                value={sessionFolder}
+                onChange={(e) => setSessionFolder(e.target.value)}
+                placeholder="C:\Users\&lt;you&gt;\Pictures\digiCamControl\Session1"
+              />
+              <div className="muted">
+                Folder tempat digiCamControl menyimpan foto. Default:{" "}
+                <code>%USERPROFILE%\Pictures\digiCamControl\Session1</code>.
+                Bridge akan deteksi JPG baru di folder ini setelah trigger capture.
+              </div>
+            </div>
+
+            <div className="muted" style={{ borderLeft: "3px solid var(--border)", paddingLeft: 10 }}>
+              <strong>Pre-flight checklist:</strong>
+              <ol style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                <li>digiCamControl GUI sudah running (kamera terdeteksi di GUI)</li>
+                <li>Webserver enabled di Settings (default port 5513)</li>
+                <li>Camera session aktif (Session1)</li>
+              </ol>
+            </div>
+          </>
         ) : null}
 
         <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>

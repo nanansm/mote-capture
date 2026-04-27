@@ -15,7 +15,11 @@ const DEFAULTS: BridgeConfig = {
   printerName: "",
   digiCamControlPath:
     process.platform === "win32"
-      ? "C:\\Program Files (x86)\\digiCamControl\\CameraControlCmd.exe"
+      ? "C:\\Program Files (x86)\\digiCamControl\\CameraControlRemoteCmd.exe"
+      : "",
+  digiCamSessionFolder:
+    process.platform === "win32"
+      ? path.join(os.homedir(), "Pictures", "digiCamControl", "Session1")
       : "",
   autoStart: false,
 };

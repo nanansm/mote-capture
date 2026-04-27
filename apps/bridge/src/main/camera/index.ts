@@ -7,6 +7,7 @@ import { MockCamera } from "./mock";
 export type CameraOptions = {
   deviceName?: string;
   digiCamControlPath?: string;
+  digiCamSessionFolder?: string;
 };
 
 export type CaptureResult = {

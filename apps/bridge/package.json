@@ -1,7 +1,7 @@
 {
   "name": "bridge",
   "productName": "mote-capture-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Mote Capture Bridge — desktop hardware connector (camera + printer) for booth locations",
   "main": "dist/main/index.js",
   "private": true,
