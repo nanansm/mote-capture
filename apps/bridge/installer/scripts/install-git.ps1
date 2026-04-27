@@ -16,7 +16,7 @@ $GitZip = Join-Path $env:TEMP "mote-mingit.zip"
 if (Test-Path $GitExe) {
     $existing = & $GitExe --version 2>$null
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "✓ Git sudah terinstall di $GitFolder ($existing)"
+        Write-Host "[OK] Git sudah terinstall di $GitFolder ($existing)"
         exit 0
     }
 }
@@ -41,9 +41,9 @@ if (-not (Test-Path $GitExe)) {
 }
 
 $installedVersion = & $GitExe --version
-Write-Host "✓ Git installed: $installedVersion @ $GitFolder"
+Write-Host "[OK] Git installed: $installedVersion @ $GitFolder"
 
-# Disable Git's safe.directory check inside our install — single-user box.
+# Disable Git's safe.directory check inside our install - single-user box.
 & $GitExe config --global --add safe.directory "*" 2>$null | Out-Null
 
 exit 0

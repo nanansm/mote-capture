@@ -1,5 +1,5 @@
 # Master installer orchestrator. Called by Inno Setup [Run] section.
-# Runs in user privilege context — no admin needed.
+# Runs in user privilege context - no admin needed.
 param(
     [Parameter(Mandatory = $true)]
     [string]$InstallDir
@@ -33,7 +33,7 @@ function Invoke-SubScript {
     & powershell.exe -ExecutionPolicy Bypass -NoProfile -File $scriptPath -InstallDir $InstallDir 2>&1 |
         ForEach-Object { Write-Log "  $_" }
     if ($LASTEXITCODE -ne 0) {
-        throw "$FailureMessage (exit $LASTEXITCODE) — see $LogFile"
+        throw "$FailureMessage (exit $LASTEXITCODE) - see $LogFile"
     }
 }
 

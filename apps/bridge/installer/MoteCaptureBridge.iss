@@ -1,7 +1,7 @@
 ; Mote Capture Bridge - All-in-One Windows Installer
 ; Compiles with Inno Setup 6 (https://jrsoftware.org/isinfo.php)
 ;
-; The compiled .exe is small (~5 MB) — it bundles only the orchestration
+; The compiled .exe is small (~5 MB) - it bundles only the orchestration
 ; PowerShell scripts. All real assets (Node.js, Git, the app code) are
 ; downloaded at install-time by the scripts.
 
@@ -51,16 +51,18 @@ Source: "scripts\*"; DestDir: "{app}\installer-scripts"; Flags: ignoreversion re
 Source: "assets\installer-icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
+; Note: runhidden flag deliberately omitted so PowerShell errors are visible
+; to the user during install. The PS scripts already redirect their own output.
 Filename: "powershell.exe"; \
     Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\installer-scripts\bootstrap.ps1"" -InstallDir ""{app}"""; \
     StatusMsg: "Mengunduh & menginstall Node.js, Git, dan kode aplikasi (10-20 menit, mohon tunggu)..."; \
-    Flags: runhidden waituntilterminated
+    Flags: waituntilterminated
 
 [Icons]
-; Note: real shortcuts are also created by create-shortcuts.ps1 (so they survive
-; an uninstall / partial reinstall). The entries below are Inno Setup's bookkeeping
-; copies — they share the same target so behavior is identical.
-Name: "{commondesktop}\{#MyAppName}"; \
+; Per-user shortcut paths (no admin needed). Real shortcuts are also created
+; by create-shortcuts.ps1 so they survive uninstall / partial reinstall;
+; the entries below are Inno Setup bookkeeping copies pointing to the same target.
+Name: "{userdesktop}\{#MyAppName}"; \
     Filename: "powershell.exe"; \
     Parameters: "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File ""{app}\installer-scripts\launch-bridge.ps1"""; \
     IconFilename: "{app}\installer-icon.ico"; \
@@ -78,7 +80,7 @@ Name: "{userprograms}\{#MyAppName}\Uninstall {#MyAppName}"; \
     Filename: "{uninstallexe}"
 
 [Registry]
-; Auto-start on Windows login (HKCU — no admin required)
+; Auto-start on Windows login (HKCU - no admin required)
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
     ValueType: string; ValueName: "MoteCaptureBridge"; \
     ValueData: """powershell.exe"" -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File ""{app}\installer-scripts\launch-bridge.ps1"""; \

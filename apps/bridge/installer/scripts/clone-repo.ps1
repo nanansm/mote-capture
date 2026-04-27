@@ -15,7 +15,7 @@ if (-not (Test-Path $GitExe)) {
 }
 
 if ((Test-Path $RepoFolder) -and (Test-Path (Join-Path $RepoFolder ".git"))) {
-    Write-Host "Repo sudah ada — pull latest dari main..."
+    Write-Host "Repo sudah ada - pull latest dari main..."
     Push-Location $RepoFolder
     try {
         & $GitExe fetch origin main
@@ -27,7 +27,7 @@ if ((Test-Path $RepoFolder) -and (Test-Path (Join-Path $RepoFolder ".git"))) {
     }
 } else {
     if (Test-Path $RepoFolder) {
-        Write-Host "Folder $RepoFolder ada tapi bukan git repo — hapus dan clone ulang"
+        Write-Host "Folder $RepoFolder ada tapi bukan git repo - hapus dan clone ulang"
         Remove-Item -Recurse -Force $RepoFolder
     }
     Write-Host "Cloning $RepoUrl ke $RepoFolder..."
@@ -42,6 +42,6 @@ if (-not (Test-Path (Join-Path $RepoFolder ".git"))) {
 }
 
 $head = & $GitExe -C $RepoFolder rev-parse --short HEAD
-Write-Host "✓ Repository ready @ $RepoFolder (HEAD=$head)"
+Write-Host "[OK] Repository ready @ $RepoFolder (HEAD=$head)"
 
 exit 0

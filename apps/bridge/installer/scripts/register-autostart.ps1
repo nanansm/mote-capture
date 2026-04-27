@@ -22,8 +22,8 @@ if (-not (Test-Path $RegPath)) {
 
 Set-ItemProperty -Path $RegPath -Name $RegName -Value $RunCommand -Type String
 
-Write-Host "✓ Auto-start registered:"
+Write-Host "[OK] Auto-start registered:"
 Write-Host "  HKCU\Software\Microsoft\Windows\CurrentVersion\Run\$RegName"
-Write-Host "  → $RunCommand"
+Write-Host "  -> $RunCommand"
 
 exit 0

@@ -1,7 +1,7 @@
 # Detect existing Node.js (>= v18) or download portable Node.js v20 LTS.
 # Writes a marker file at $InstallDir\node-marker.txt:
-#   USE_LOCAL                  → use $InstallDir\node\
-#   USE_SYSTEM:<path-to-bin>   → use system Node located at <path>
+#   USE_LOCAL                  -> use $InstallDir\node\
+#   USE_SYSTEM:<path-to-bin>   -> use system Node located at <path>
 param(
     [Parameter(Mandatory = $true)]
     [string]$InstallDir
@@ -45,7 +45,7 @@ if ($systemNode) {
     if (Test-NodeUsable -NodeExe $systemNodeExe) {
         $systemVersion = & $systemNodeExe --version
         Write-Host "System Node.js terdeteksi: $systemVersion ($systemNodeExe)"
-        Write-Host "Skip install — pakai system Node.js."
+        Write-Host "Skip install - pakai system Node.js."
         $systemNodeDir = Split-Path $systemNodeExe -Parent
         "USE_SYSTEM:$systemNodeDir" | Out-File -FilePath $NodeMarker -Encoding ASCII
         exit 0
@@ -86,7 +86,7 @@ if (-not (Test-Path $localNodeExe)) {
 }
 
 $installedVersion = & $localNodeExe --version
-Write-Host "✓ Node.js installed: $installedVersion @ $NodeFolder"
+Write-Host "[OK] Node.js installed: $installedVersion @ $NodeFolder"
 "USE_LOCAL" | Out-File -FilePath $NodeMarker -Encoding ASCII
 
 exit 0

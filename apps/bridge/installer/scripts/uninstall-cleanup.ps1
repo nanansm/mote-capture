@@ -40,5 +40,5 @@ if (Test-Path $StartMenuFolder) {
 }
 
 # Inno Setup uninstaller will remove $InstallDir itself after this script.
-Write-Host "✓ Cleanup complete"
+Write-Host "[OK] Cleanup complete"
 exit 0

@@ -11,7 +11,7 @@ $NpmGlobalDir = Join-Path $InstallDir "npm-global"
 $PnpmCmd = Join-Path $NpmGlobalDir "pnpm.cmd"
 
 if (-not (Test-Path $NodeMarker)) {
-    throw "Node marker file tidak ditemukan ($NodeMarker) — install-nodejs.ps1 belum dijalankan?"
+    throw "Node marker file tidak ditemukan ($NodeMarker) - install-nodejs.ps1 belum dijalankan?"
 }
 
 $marker = (Get-Content $NodeMarker -Raw).Trim()
@@ -29,7 +29,7 @@ if (-not (Test-Path $NpmCmd)) {
 if (Test-Path $PnpmCmd) {
     $existing = & $PnpmCmd --version 2>$null
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "✓ pnpm sudah terinstall: $existing"
+        Write-Host "[OK] pnpm sudah terinstall: $existing"
         exit 0
     }
 }
@@ -50,6 +50,6 @@ if (-not (Test-Path $PnpmCmd)) {
 }
 
 $pnpmVersion = & $PnpmCmd --version
-Write-Host "✓ pnpm installed: $pnpmVersion @ $PnpmCmd"
+Write-Host "[OK] pnpm installed: $pnpmVersion @ $PnpmCmd"
 
 exit 0

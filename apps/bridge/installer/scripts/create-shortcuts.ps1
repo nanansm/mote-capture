@@ -31,7 +31,7 @@ $Shortcut.IconLocation = $IconFile
 $Shortcut.Description = "Mote Capture Bridge"
 $Shortcut.WindowStyle = 7   # Minimized
 $Shortcut.Save()
-Write-Host "✓ Desktop shortcut: $DesktopLink"
+Write-Host "[OK] Desktop shortcut: $DesktopLink"
 
 # Start Menu shortcut
 $StartMenu = [Environment]::GetFolderPath("Programs")
@@ -47,6 +47,6 @@ $Shortcut2.IconLocation = $IconFile
 $Shortcut2.Description = "Mote Capture Bridge"
 $Shortcut2.WindowStyle = 7
 $Shortcut2.Save()
-Write-Host "✓ Start Menu shortcut: $StartMenuLink"
+Write-Host "[OK] Start Menu shortcut: $StartMenuLink"
 
 exit 0

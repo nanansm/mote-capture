@@ -33,7 +33,7 @@ $env:PNPM_HOME = Join-Path $InstallDir "pnpm-store"
 
 Push-Location $RepoFolder
 try {
-    Write-Host "Installing dependencies (pnpm install) — biasanya 5-10 menit..."
+    Write-Host "Installing dependencies (pnpm install) - biasanya 5-10 menit..."
     & $PnpmCmd install --prefer-offline
     if ($LASTEXITCODE -ne 0) {
         Write-Host "pnpm install --prefer-offline gagal, retry tanpa offline..."
@@ -58,7 +58,7 @@ try {
         Write-Host "WARN: pre-build gagal, akan re-build saat dev:bridge dijalankan"
     }
 
-    Write-Host "✓ Project setup complete"
+    Write-Host "[OK] Project setup complete"
 }
 finally {
     Pop-Location

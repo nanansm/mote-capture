@@ -44,7 +44,7 @@ if (-not (Test-Path $PnpmCmd)) {
 
 Push-Location $RepoFolder
 try {
-    # Auto-update — silent fail if no internet.
+    # Auto-update - silent fail if no internet.
     if (Test-Path $GitExe) {
         Write-RuntimeLog "Checking for updates..."
         try {
