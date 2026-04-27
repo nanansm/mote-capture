@@ -25,16 +25,27 @@ export type LayoutJson = {
   cutLineX?: number;
 };
 
+// Safe horizontal margin (px) reserved on each side of the 1800x1200 canvas
+// so branding doesn't get chopped by the Epson L8050's ~3-5mm unprintable
+// border. Frame PNG designers should keep important content inside the safe
+// area: x in [SAFE_MARGIN_X, canvasWidth - SAFE_MARGIN_X].
+export const SAFE_MARGIN_X = 80;
+
+// Default 2-strip layout @ 1800x1200, fits inside SAFE_MARGIN_X on both sides.
+//   Left strip:  x in [80, 900]   (width 820)
+//   Right strip: x in [900, 1720] (width 820)
+//   Cut line:    x = 900 (centre)
+// Each strip has 3 photo slots stacked vertically with 35px vertical gutters.
 export const DEFAULT_LAYOUT_B: LayoutJson = {
   canvasWidth: 1800,
   canvasHeight: 1200,
   photoSlots: [
-    { stripIndex: 0, x: 65, y: 80, width: 770, height: 320, photoIndex: 0 },
-    { stripIndex: 0, x: 65, y: 425, width: 770, height: 320, photoIndex: 1 },
-    { stripIndex: 0, x: 65, y: 770, width: 770, height: 320, photoIndex: 2 },
-    { stripIndex: 1, x: 965, y: 80, width: 770, height: 320, photoIndex: 0 },
-    { stripIndex: 1, x: 965, y: 425, width: 770, height: 320, photoIndex: 1 },
-    { stripIndex: 1, x: 965, y: 770, width: 770, height: 320, photoIndex: 2 },
+    { stripIndex: 0, x: 95,  y: 80,  width: 790, height: 320, photoIndex: 0 },
+    { stripIndex: 0, x: 95,  y: 425, width: 790, height: 320, photoIndex: 1 },
+    { stripIndex: 0, x: 95,  y: 770, width: 790, height: 320, photoIndex: 2 },
+    { stripIndex: 1, x: 915, y: 80,  width: 790, height: 320, photoIndex: 0 },
+    { stripIndex: 1, x: 915, y: 425, width: 790, height: 320, photoIndex: 1 },
+    { stripIndex: 1, x: 915, y: 770, width: 790, height: 320, photoIndex: 2 },
   ],
   stripCount: 2,
   cutLineX: 900,

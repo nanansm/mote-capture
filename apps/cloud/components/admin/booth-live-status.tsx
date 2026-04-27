@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, ExternalLink, RotateCcw, Wifi, WifiOff } from "lucide-react";
 import { toast } from "sonner";
@@ -10,6 +10,16 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAdminBoothStatuses } from "@/lib/socket/use-admin-socket";
 import { formatDate } from "@/lib/utils";
+
+// Treat heartbeat metadata as fresh for 90s after last receive. Bridge sends
+// a heartbeat every 30s, so a 90s window allows up to 2 missed pings before
+// we mark the camera/printer as "Not reported" (avoiding flicker on a single
+// late packet).
+const BOOTH_HEARTBEAT_VALID_MS = 90_000;
+// Pull fresh metadata from the server every 10s. The socket broadcasts
+// already cover online/offline transitions live; this catches camera/printer
+// status changes that only show up via the next heartbeat write.
+const ADMIN_REFRESH_INTERVAL_MS = 10_000;
 
 export function BoothLiveStatus({
   boothId,
@@ -26,6 +36,14 @@ export function BoothLiveStatus({
   const statuses = useAdminBoothStatuses();
   const live = statuses[boothId];
   const [resetting, setResetting] = useState(false);
+
+  // Trigger periodic re-render of the server component so metadata refreshes.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      router.refresh();
+    }, ADMIN_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [router]);
 
   const camera = useMemo(() => {
     const c = (metadata?.camera ?? {}) as {
@@ -53,6 +71,14 @@ export function BoothLiveStatus({
   const inSession = Boolean(live?.inSession);
   const sessionId = live?.activeSessionId;
   const useMockBridge = (metadata?.use_mock_bridge as boolean | undefined) ?? true;
+
+  // Heartbeat metadata older than the valid window is treated as unknown so
+  // the camera/printer status doesn't lie about being connected after the
+  // bridge has gone away.
+  const heartbeatFresh =
+    !!lastSeenAt && Date.now() - lastSeenAt.getTime() < BOOTH_HEARTBEAT_VALID_MS;
+  const cameraConnected = heartbeatFresh && Boolean(camera?.connected);
+  const printerConnected = heartbeatFresh && Boolean(printer?.connected);
 
   async function handleForceReset() {
     if (!sessionId) {
@@ -116,7 +142,7 @@ export function BoothLiveStatus({
           <div className="rounded-md border border-input p-3">
             <p className="text-xs uppercase tracking-wider text-muted-foreground">Camera</p>
             <p className="font-semibold text-brand-green-dark">
-              {camera?.connected ? "🟢 Connected" : "⚪ Not reported"}
+              {cameraConnected ? "🟢 Connected" : "⚪ Not reported"}
             </p>
             {camera?.model ? (
               <p className="text-xs text-muted-foreground">{camera.model}</p>
@@ -131,7 +157,7 @@ export function BoothLiveStatus({
           <div className="rounded-md border border-input p-3">
             <p className="text-xs uppercase tracking-wider text-muted-foreground">Printer</p>
             <p className="font-semibold text-brand-green-dark">
-              {printer?.connected ? "🟢 Ready" : "⚪ Not reported"}
+              {printerConnected ? "🟢 Ready" : "⚪ Not reported"}
             </p>
             {printer?.model ? (
               <p className="text-xs text-muted-foreground">{printer.model}</p>

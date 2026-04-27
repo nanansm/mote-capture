@@ -97,11 +97,53 @@ export class Win32Printer implements PrinterDevice {
       }
     }
 
-    // mspaint /pt = silent print (no dialog), uses default printer settings.
+    // Silent print via System.Drawing.Printing.PrintDocument. mspaint /pt
+    // surfaces the Windows print dialog on top of the kiosk fullscreen,
+    // which interrupts customers; PrintDocument prints headlessly.
+    //
+    // Paper config: 4R landscape (4x6 inch). PaperSize is in 100ths of inch
+    // and we pass 600x400 to match a 6"x4" landscape sheet, with margins=0
+    // and DrawImage(image, e.PageBounds) so the composite fills the entire
+    // printable area edge-to-edge (composite already has SAFE_MARGIN_X
+    // baked in to avoid the Epson L8050's unprintable border).
+    const escFile = filePath.replace(/'/g, "''");
+    const escPrinter = this.printerName!.replace(/'/g, "''");
+    const psScript = [
+      "$ErrorActionPreference = 'Stop'",
+      "Add-Type -AssemblyName System.Drawing",
+      `$image = [System.Drawing.Image]::FromFile('${escFile}')`,
+      "try {",
+      "  $printDoc = New-Object System.Drawing.Printing.PrintDocument",
+      `  $printDoc.PrinterSettings.PrinterName = '${escPrinter}'`,
+      "  $paper = New-Object System.Drawing.Printing.PaperSize('4R', 600, 400)",
+      "  $paper.RawKind = 0",
+      "  $printDoc.DefaultPageSettings.PaperSize = $paper",
+      "  $printDoc.DefaultPageSettings.Landscape = $true",
+      "  $printDoc.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0,0,0,0)",
+      "  $printDoc.PrintController = New-Object System.Drawing.Printing.StandardPrintController",
+      "  $printDoc.add_PrintPage({",
+      "    param($sender, $e)",
+      "    $e.Graphics.DrawImage($image, $e.PageBounds)",
+      "  })",
+      "  $printDoc.Print()",
+      "} finally {",
+      "  $image.Dispose()",
+      "}",
+    ].join("\n");
+
     const result = await exec(
-      "mspaint",
-      ["/pt", filePath, this.printerName!],
-      90_000,
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        psScript,
+      ],
+      60_000,
     );
     if (result.code !== 0) {
       logger.warn("printer_win32_failed", {
@@ -110,7 +152,10 @@ export class Win32Printer implements PrinterDevice {
         stderr: result.stderr,
         stdout: result.stdout,
       });
-      return { ok: false, error: result.stderr || result.stdout || `Print gagal (exit ${result.code})` };
+      return {
+        ok: false,
+        error: result.stderr || result.stdout || `Print gagal (exit ${result.code})`,
+      };
     }
     logger.info("printer_win32_ok", { printer: this.printerName, file: filePath });
     return { ok: true };

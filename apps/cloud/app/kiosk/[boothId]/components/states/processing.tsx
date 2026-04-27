@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { Loader2 } from "lucide-react";
 import { displayUrl } from "@/lib/storage/r2-client";
 import type { useTranslation } from "@/lib/i18n/use-translation";
 
@@ -13,6 +14,12 @@ export function ProcessingState({
   photos: string[];
   t: T;
 }) {
+  // Always render 3 slots so the layout doesn't pop - fill each slot with the
+  // captured photo if we have it, otherwise show a spinner placeholder. This
+  // also avoids the broken-image icon that appears when an empty string slips
+  // through as a src.
+  const slots = [0, 1, 2].map((i) => photos[i] ?? "");
+
   return (
     <div className="relative flex h-full w-full flex-col items-center justify-center bg-brand-cream px-8">
       <div className="flex flex-col items-center gap-10 text-center">
@@ -22,16 +29,24 @@ export function ProcessingState({
         <p className="text-lg text-brand-green-dark/70">{t("kiosk.processing.subtitle")}</p>
 
         <div className="flex items-end gap-4">
-          {photos.slice(0, 3).map((url, i) => (
+          {slots.map((url, i) => (
             <motion.div
-              key={`${url}-${i}`}
+              key={i}
               initial={{ opacity: 0, y: 30, rotate: 0 }}
               animate={{ opacity: 1, y: 0, rotate: i === 0 ? -3 : i === 2 ? 3 : 0 }}
               transition={{ delay: i * 0.25, type: "spring", stiffness: 120 }}
-              className="h-44 w-32 overflow-hidden rounded-xl border-4 border-white bg-muted shadow-xl"
+              className="flex h-44 w-32 items-center justify-center overflow-hidden rounded-xl border-4 border-white bg-muted shadow-xl"
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={displayUrl(url)} alt={`Photo ${i + 1}`} className="h-full w-full object-cover" />
+              {url ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={displayUrl(url)}
+                  alt={`Photo ${i + 1}`}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <Loader2 className="h-8 w-8 animate-spin text-brand-green-dark/50" />
+              )}
             </motion.div>
           ))}
         </div>
