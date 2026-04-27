@@ -40,12 +40,12 @@ export type LogEntry = {
   meta?: Record<string, unknown>;
 };
 
-// IPC channel names — keep in sync with renderer + main
+// IPC channel names - keep in sync with renderer + main
 export const IpcChannels = {
   CONFIG_GET: "config:get",
   CONFIG_SAVE: "config:save",
   STATUS_GET: "status:get",
-  STATUS_CHANGED: "status:changed", // main → renderer (broadcast)
+  STATUS_CHANGED: "status:changed", // main -> renderer (broadcast)
   CAMERA_TEST: "camera:test",
   CAMERA_LIST: "camera:list",
   PRINTER_TEST: "printer:test",
@@ -53,7 +53,7 @@ export const IpcChannels = {
   LOGS_GET: "logs:get",
   LOGS_CLEAR: "logs:clear",
   LOGS_OPEN_FOLDER: "logs:openFolder",
-  LOG_APPENDED: "logs:appended", // main → renderer (broadcast)
+  LOG_APPENDED: "logs:appended", // main -> renderer (broadcast)
   CONNECT_NOW: "bridge:connectNow",
   DISCONNECT_NOW: "bridge:disconnectNow",
   OPEN_EXTERNAL: "shell:openExternal",

@@ -1,5 +1,6 @@
-// Windows printing — silent print of an image via PowerShell + the OS print
-// shell verb (which uses the printer's default driver settings).
+// Windows printing - silent print of an image via mspaint /pt + the printer's
+// default driver settings. Printer enumeration uses Get-Printer (PowerShell)
+// with JSON output so we can also see status (skip Error/PendingDeletion).
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import type { PrinterDevice, PrinterOptions, PrintResult } from "./index";
@@ -32,6 +33,18 @@ function exec(
   });
 }
 
+// Get-Printer returns one entry per installed printer. Status flags we want
+// to skip: Error, PendingDeletion. Everything else (Normal, Idle, Paused,
+// Printing, Busy, Offline, etc.) is acceptable - the user might still want
+// to pick it.
+const SKIP_STATUSES = new Set(["Error", "PendingDeletion"]);
+
+type PrinterInfo = {
+  Name: string;
+  PrinterStatus?: string | number;
+  Default?: boolean;
+};
+
 export class Win32Printer implements PrinterDevice {
   readonly mode: PrinterMode = "win32";
   private printerName?: string;
@@ -44,14 +57,29 @@ export class Win32Printer implements PrinterDevice {
     if (process.platform !== "win32") {
       throw new Error("Mode 'win32' hanya tersedia di Windows.");
     }
-    if (!this.printerName) {
-      // Try to fall back to the default printer.
-      const printers = await this.listPrinters().catch(() => [] as string[]);
-      if (printers.length === 0) {
-        throw new Error("Tidak ada printer terdeteksi.");
-      }
-      this.printerName = printers[0];
+    // If a printer was already chosen in config, accept it without further
+    // validation - listing can fail transiently and we should not crash init
+    // because of that. Test/print paths will surface real errors.
+    if (this.printerName && this.printerName.trim().length > 0) {
+      logger.info("printer_win32_init", { printer: this.printerName, source: "config" });
+      return;
     }
+    // No printer chosen yet - try to fall back to the OS default.
+    const def = await this.getDefaultPrinter().catch(() => undefined);
+    if (def) {
+      this.printerName = def;
+      logger.info("printer_win32_init", { printer: def, source: "default" });
+      return;
+    }
+    // Last resort: pick the first listed printer so we have something to point at.
+    const printers = await this.listPrinters().catch(() => [] as string[]);
+    if (printers.length === 0) {
+      throw new Error(
+        "Tidak ada printer terdeteksi. Tambah printer di Settings > Bluetooth & Devices > Printers.",
+      );
+    }
+    this.printerName = printers[0];
+    logger.info("printer_win32_init", { printer: this.printerName, source: "first" });
   }
 
   async print(filePath: string): Promise<PrintResult> {
@@ -61,30 +89,56 @@ export class Win32Printer implements PrinterDevice {
     if (!fs.existsSync(filePath)) {
       return { ok: false, error: `File tidak ditemukan: ${filePath}` };
     }
-    if (!this.printerName) await this.init();
+    if (!this.printerName) {
+      try {
+        await this.init();
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
 
-    // Use mspaint /pt for silent print (non-blocking dialog-free print).
+    // mspaint /pt = silent print (no dialog), uses default printer settings.
     const result = await exec(
       "mspaint",
       ["/pt", filePath, this.printerName!],
       90_000,
     );
     if (result.code !== 0) {
-      logger.warn("printer_win32_failed", { stderr: result.stderr });
-      return { ok: false, error: result.stderr || "Print gagal" };
+      logger.warn("printer_win32_failed", {
+        printer: this.printerName,
+        code: result.code,
+        stderr: result.stderr,
+        stdout: result.stdout,
+      });
+      return { ok: false, error: result.stderr || result.stdout || `Print gagal (exit ${result.code})` };
     }
     logger.info("printer_win32_ok", { printer: this.printerName, file: filePath });
     return { ok: true };
   }
 
   async testConnection(): Promise<DeviceTestResult> {
+    if (process.platform !== "win32") {
+      return { ok: false, error: "Mode 'win32' hanya tersedia di Windows." };
+    }
     try {
       const printers = await this.listPrinters();
-      const target = this.printerName ?? printers[0];
-      if (!target) {
-        return { ok: false, error: "Tidak ada printer terpasang." };
+      // If the user set a printer name in config, prefer it as the test target.
+      if (this.printerName && this.printerName.trim().length > 0) {
+        if (printers.length > 0 && !printers.includes(this.printerName)) {
+          return {
+            ok: false,
+            error:
+              `Printer "${this.printerName}" tidak ditemukan.\n\n` +
+              `Tersedia: ${printers.join(", ") || "(none)"}`,
+          };
+        }
+        return { ok: true, deviceName: this.printerName };
       }
-      return { ok: true, deviceName: target };
+      // No name set - fall back to default
+      const def = await this.getDefaultPrinter().catch(() => undefined);
+      if (def) return { ok: true, deviceName: def };
+      if (printers.length === 0) return { ok: false, error: "Tidak ada printer terpasang." };
+      return { ok: true, deviceName: printers[0] };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -92,13 +146,60 @@ export class Win32Printer implements PrinterDevice {
 
   async listPrinters(): Promise<string[]> {
     if (process.platform !== "win32") return [];
-    const ps = `Get-Printer | Select-Object -ExpandProperty Name`;
+    // ConvertTo-Json -Compress avoids extra whitespace; -Depth 3 covers nested fields.
+    const ps =
+      "Get-Printer | Select-Object Name,PrinterStatus,Default | " +
+      "ConvertTo-Json -Compress -Depth 3";
     const result = await exec(
       "powershell.exe",
-      ["-NoProfile", "-Command", ps],
-      8_000,
+      ["-NoProfile", "-NonInteractive", "-Command", ps],
+      10_000,
     );
-    if (result.code !== 0) return [];
-    return result.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (result.code !== 0) {
+      logger.warn("printer_list_failed", {
+        code: result.code,
+        stderr: result.stderr,
+        stdout: result.stdout,
+      });
+      return [];
+    }
+    const raw = result.stdout.trim();
+    if (!raw) return [];
+    let parsed: PrinterInfo[] | PrinterInfo;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      logger.warn("printer_list_parse_failed", {
+        err: err instanceof Error ? err.message : String(err),
+        raw: raw.slice(0, 500),
+      });
+      return [];
+    }
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    const filtered = list
+      .filter((p) => p && typeof p.Name === "string")
+      .filter((p) => {
+        const status = typeof p.PrinterStatus === "string" ? p.PrinterStatus : "";
+        return !SKIP_STATUSES.has(status);
+      })
+      .map((p) => p.Name)
+      .filter((name): name is string => Boolean(name));
+    logger.debug("printer_list_ok", { count: filtered.length, names: filtered });
+    return filtered;
+  }
+
+  private async getDefaultPrinter(): Promise<string | undefined> {
+    if (process.platform !== "win32") return undefined;
+    const ps =
+      "Get-CimInstance Win32_Printer -Filter 'Default = TRUE' | " +
+      "Select-Object -ExpandProperty Name";
+    const r = await exec(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", ps],
+      6_000,
+    );
+    if (r.code !== 0) return undefined;
+    const name = r.stdout.split(/\r?\n/)[0]?.trim();
+    return name || undefined;
   }
 }

@@ -24,10 +24,11 @@ export function CameraTab({
   async function onSave() {
     setBusy(true);
     try {
+      // Always send strings (never undefined) so electron-store doesn't choke.
       await save({
         cameraMode: mode,
-        cameraDeviceName: deviceName.trim() || undefined,
-        digiCamControlPath: digicamPath.trim() || undefined,
+        cameraDeviceName: deviceName.trim(),
+        digiCamControlPath: digicamPath.trim(),
       });
     } finally {
       setBusy(false);

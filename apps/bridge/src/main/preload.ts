@@ -1,11 +1,13 @@
-// Preload script — exposes a typed `bridgeAPI` on window for the renderer.
+// Preload script - exposes a typed `bridgeAPI` on window for the renderer.
 import { contextBridge, ipcRenderer } from "electron";
 import { IpcChannels } from "../shared/types";
 import type {
   BridgeConfig,
   BridgeStatus,
+  CameraMode,
   DeviceTestResult,
   LogEntry,
+  PrinterMode,
 } from "../shared/types";
 
 const api = {
@@ -22,7 +24,10 @@ const api = {
   },
   testCamera: (): Promise<DeviceTestResult> => ipcRenderer.invoke(IpcChannels.CAMERA_TEST),
   testPrinter: (): Promise<DeviceTestResult> => ipcRenderer.invoke(IpcChannels.PRINTER_TEST),
-  listPrinters: (): Promise<string[]> => ipcRenderer.invoke(IpcChannels.PRINTER_LIST),
+  listPrinters: (mode?: PrinterMode): Promise<string[]> =>
+    ipcRenderer.invoke(IpcChannels.PRINTER_LIST, mode),
+  listCameras: (mode?: CameraMode): Promise<string[]> =>
+    ipcRenderer.invoke(IpcChannels.CAMERA_LIST, mode),
   getLogs: (): Promise<LogEntry[]> => ipcRenderer.invoke(IpcChannels.LOGS_GET),
   clearLogs: (): Promise<void> => ipcRenderer.invoke(IpcChannels.LOGS_CLEAR),
   openLogFolder: (): Promise<void> => ipcRenderer.invoke(IpcChannels.LOGS_OPEN_FOLDER),
