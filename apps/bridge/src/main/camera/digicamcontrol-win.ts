@@ -239,4 +239,31 @@ export class DigiCamControlCamera implements CameraDevice {
   async cleanup(): Promise<void> {
     // Nothing to clean up - RemoteCmd is one-shot per spawn.
   }
+
+  async startLiveView(): Promise<void> {
+    // The /liveview.jpg endpoint serves the most recent frame from whatever
+    // live-view session the GUI has open. If no live view is active, fire
+    // LiveViewWnd_Show so subsequent polls return real frames. Best-effort:
+    // a missing webserver / GUI is logged but not raised.
+    try {
+      const res = await fetch("http://127.0.0.1:5513/?CMD=LiveViewWnd_Show", {
+        signal: AbortSignal.timeout(2000),
+      });
+      logger.debug("camera_digicam_live_view_show", { status: res.status });
+    } catch (err) {
+      logger.debug("camera_digicam_live_view_show_failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async stopLiveView(): Promise<void> {
+    try {
+      await fetch("http://127.0.0.1:5513/?CMD=LiveViewWnd_Hide", {
+        signal: AbortSignal.timeout(2000),
+      });
+    } catch {
+      // ignore — closing live view is non-critical
+    }
+  }
 }

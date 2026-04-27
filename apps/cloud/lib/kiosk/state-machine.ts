@@ -4,6 +4,7 @@ export type KioskState =
   | "IDLE"
   | "PILIH_FRAME"
   | "KONFIRMASI"
+  | "VOUCHER_INPUT"
   | "PAYMENT"
   | "PEMBAYARAN_OK"
   | "COUNTDOWN"
@@ -11,6 +12,10 @@ export type KioskState =
   | "PREVIEW"
   | "INPUT_KONTAK"
   | "DONE";
+
+export type PaymentMethod = "cashless" | "voucher";
+
+export type CountdownPhase = "GET_READY" | "COUNTDOWN" | "CHEESE";
 
 export type KioskContext = {
   boothId: string;
@@ -21,9 +26,11 @@ export type KioskContext = {
   amount?: number;
   qrString?: string;
   paymentExpiresAt?: string;
+  paymentMethod?: PaymentMethod;
   capturedPhotoUrls: string[];
   countdownStep: 1 | 2 | 3;
   countdownNumber: number;
+  countdownPhase: CountdownPhase;
   compositeUrl?: string;
   downloadToken?: string;
   customerPhone?: string;
@@ -38,6 +45,9 @@ export type KioskEvent =
   | { type: "TAP_START" }
   | { type: "FRAME_PICKED"; frame: KioskContext["selectedFrame"] }
   | { type: "CONFIRM_PAY" }
+  | { type: "CHOOSE_CASHLESS" }
+  | { type: "CHOOSE_VOUCHER" }
+  | { type: "VOUCHER_REDEEMED"; sessionId: string }
   | { type: "BACK" }
   | { type: "PAYMENT_QR"; sessionId: string; qrString: string; amount: number; expiresAt: string; mockMode: boolean }
   | { type: "PAYMENT_PAID"; sessionId: string }
@@ -45,6 +55,7 @@ export type KioskEvent =
   | { type: "TAP_MULAI_FOTO" }
   | { type: "ENTER_COUNTDOWN" }
   | { type: "COUNTDOWN_TICK"; value: number }
+  | { type: "COUNTDOWN_PHASE"; phase: CountdownPhase }
   | { type: "PHOTO_TAKEN"; url: string; index: number }
   | { type: "ENTER_PROCESSING" }
   | { type: "COMPOSITE_READY"; url: string; downloadToken: string }
@@ -78,7 +89,8 @@ export function initialMachine(opts: {
       defaultPrice: opts.defaultPrice,
       capturedPhotoUrls: [],
       countdownStep: 1,
-      countdownNumber: 5,
+      countdownNumber: 3,
+      countdownPhase: "GET_READY",
       language: opts.language,
       mockMode: opts.mockMode,
       bridgeOnline: opts.bridgeOnline,
@@ -126,10 +138,37 @@ export function reducer(machine: KioskMachine, event: KioskEvent): KioskMachine 
       if (event.type === "BACK") return { state: "IDLE", context: resetContext(context) };
       break;
     case "KONFIRMASI":
-      if (event.type === "CONFIRM_PAY") {
-        return { state: "PAYMENT", context };
+      if (event.type === "CHOOSE_CASHLESS" || event.type === "CONFIRM_PAY") {
+        return { state: "PAYMENT", context: { ...context, paymentMethod: "cashless" } };
+      }
+      if (event.type === "CHOOSE_VOUCHER") {
+        return { state: "VOUCHER_INPUT", context: { ...context, paymentMethod: "voucher" } };
       }
       if (event.type === "BACK") return { state: "PILIH_FRAME", context };
+      break;
+    case "VOUCHER_INPUT":
+      if (event.type === "VOUCHER_REDEEMED" || event.type === "PAYMENT_PAID") {
+        return {
+          state: "PEMBAYARAN_OK",
+          context: { ...context, sessionId: event.sessionId },
+        };
+      }
+      // Same QR-arrival side-effect as PAYMENT — keeps sessionId/amount fresh
+      // even though the voucher path ignores qrString.
+      if (event.type === "PAYMENT_QR") {
+        return {
+          state,
+          context: {
+            ...context,
+            sessionId: event.sessionId,
+            qrString: event.qrString,
+            amount: event.amount,
+            paymentExpiresAt: event.expiresAt,
+            mockMode: event.mockMode || context.mockMode,
+          },
+        };
+      }
+      if (event.type === "BACK") return { state: "KONFIRMASI", context };
       break;
     case "PAYMENT":
       if (event.type === "PAYMENT_QR") {
@@ -156,7 +195,12 @@ export function reducer(machine: KioskMachine, event: KioskEvent): KioskMachine 
       if (event.type === "TAP_MULAI_FOTO" || event.type === "ENTER_COUNTDOWN") {
         return {
           state: "COUNTDOWN",
-          context: { ...context, countdownStep: 1, countdownNumber: 5 },
+          context: {
+            ...context,
+            countdownStep: 1,
+            countdownNumber: 3,
+            countdownPhase: "GET_READY",
+          },
         };
       }
       break;
@@ -164,13 +208,16 @@ export function reducer(machine: KioskMachine, event: KioskEvent): KioskMachine 
       if (event.type === "COUNTDOWN_TICK") {
         return { state, context: { ...context, countdownNumber: event.value } };
       }
+      if (event.type === "COUNTDOWN_PHASE") {
+        return { state, context: { ...context, countdownPhase: event.phase } };
+      }
       if (event.type === "PHOTO_TAKEN") {
         const next = [...context.capturedPhotoUrls];
         next[event.index - 1] = event.url;
         if (event.index >= 3) {
           return {
             state: "PROCESSING",
-            context: { ...context, capturedPhotoUrls: next, countdownNumber: 5 },
+            context: { ...context, capturedPhotoUrls: next, countdownNumber: 3 },
           };
         }
         const nextStep = ((event.index + 1) as 1 | 2 | 3);
@@ -180,7 +227,9 @@ export function reducer(machine: KioskMachine, event: KioskEvent): KioskMachine 
             ...context,
             capturedPhotoUrls: next,
             countdownStep: nextStep,
-            countdownNumber: 5,
+            countdownNumber: 3,
+            // Photos 2 & 3 skip GET_READY — straight into the 3-2-1 cadence.
+            countdownPhase: "COUNTDOWN",
           },
         };
       }
@@ -228,7 +277,8 @@ function resetContext(context: KioskContext): KioskContext {
     defaultPrice: context.defaultPrice,
     capturedPhotoUrls: [],
     countdownStep: 1,
-    countdownNumber: 5,
+    countdownNumber: 3,
+    countdownPhase: "GET_READY",
     language: context.language,
     mockMode: context.mockMode,
     bridgeOnline: context.bridgeOnline,

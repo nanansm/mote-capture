@@ -21,6 +21,10 @@ export interface CameraDevice {
   capture(): Promise<CaptureResult>;
   testConnection(): Promise<DeviceTestResult>;
   cleanup(): Promise<void>;
+  // Optional: open the camera's live view so the kiosk can poll preview JPGs.
+  // Best-effort — drivers without a live view simply no-op.
+  startLiveView?(): Promise<void>;
+  stopLiveView?(): Promise<void>;
 }
 
 export function createCamera(mode: CameraMode, options: CameraOptions = {}): CameraDevice {

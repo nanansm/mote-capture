@@ -99,13 +99,19 @@ export class Win32Printer implements PrinterDevice {
 
     // Silent print via System.Drawing.Printing.PrintDocument. mspaint /pt
     // surfaces the Windows print dialog on top of the kiosk fullscreen,
-    // which interrupts customers; PrintDocument prints headlessly.
+    // which interrupts customers; PrintDocument prints headlessly via
+    // StandardPrintController (no progress dialog).
     //
-    // Paper config: 4R landscape (4x6 inch). PaperSize is in 100ths of inch
-    // and we pass 600x400 to match a 6"x4" landscape sheet, with margins=0
-    // and DrawImage(image, e.PageBounds) so the composite fills the entire
-    // printable area edge-to-edge (composite already has SAFE_MARGIN_X
-    // baked in to avoid the Epson L8050's unprintable border).
+    // Paper sizing: prefer one of the driver's enumerated PaperSizes
+    // (matched by name "4 x 6" / "4R" or by 4x6-inch dimensions in either
+    // orientation, since some drivers list it as 400x600 instead of
+    // 600x400). Using a registered PaperSize avoids the "paper mismatch"
+    // confirmation that the Epson driver pops on top of the kiosk when a
+    // RawKind=0 custom size is forced.
+    //
+    // Margins=0 + DrawImage(image, e.PageBounds) so the composite fills
+    // the entire printable area edge-to-edge (composite already has
+    // SAFE_MARGIN_X baked in to avoid the Epson L8050's unprintable border).
     const escFile = filePath.replace(/'/g, "''");
     const escPrinter = this.printerName!.replace(/'/g, "''");
     const psScript = [
@@ -115,9 +121,24 @@ export class Win32Printer implements PrinterDevice {
       "try {",
       "  $printDoc = New-Object System.Drawing.Printing.PrintDocument",
       `  $printDoc.PrinterSettings.PrinterName = '${escPrinter}'`,
-      "  $paper = New-Object System.Drawing.Printing.PaperSize('4R', 600, 400)",
-      "  $paper.RawKind = 0",
-      "  $printDoc.DefaultPageSettings.PaperSize = $paper",
+      "  $matched = $null",
+      "  foreach ($ps in $printDoc.PrinterSettings.PaperSizes) {",
+      "    $name = $ps.PaperName",
+      "    $w = $ps.Width; $h = $ps.Height",
+      "    $is4x6 = (($w -eq 400 -and $h -eq 600) -or ($w -eq 600 -and $h -eq 400))",
+      "    if ($name -match '4\\s*[xX]\\s*6' -or $name -match '4R' -or $is4x6) {",
+      "      $matched = $ps; break",
+      "    }",
+      "  }",
+      "  if ($matched -ne $null) {",
+      "    $printDoc.DefaultPageSettings.PaperSize = $matched",
+      "    Write-Host \"paper:matched name='$($matched.PaperName)' w=$($matched.Width) h=$($matched.Height)\"",
+      "  } else {",
+      "    $paper = New-Object System.Drawing.Printing.PaperSize('4R', 600, 400)",
+      "    $paper.RawKind = 0",
+      "    $printDoc.DefaultPageSettings.PaperSize = $paper",
+      "    Write-Host 'paper:fallback custom 600x400'",
+      "  }",
       "  $printDoc.DefaultPageSettings.Landscape = $true",
       "  $printDoc.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0,0,0,0)",
       "  $printDoc.PrintController = New-Object System.Drawing.Printing.StandardPrintController",

@@ -2,9 +2,11 @@
 export const KIOSK_TIMING = {
   IDLE_RESET_MS: 5 * 60 * 1000, // 5 min
   PAYMENT_TIMEOUT_MS: 5 * 60 * 1000,
+  GET_READY_MS: 10_000, // pre-photo-1 only; gives guests time to pose
   COUNTDOWN_PER_PHOTO_MS: 8000, // 5s countdown + 3s capture window
   COUNTDOWN_TICK_MS: 1000,
   COUNTDOWN_FLASH_MS: 300,
+  LIVE_PREVIEW_POLL_MS: 150,
   PROCESSING_TIMEOUT_MS: 30_000,
   PREVIEW_AUTO_ADVANCE_MS: 5000,
   CONTACT_TIMEOUT_MS: 60_000,

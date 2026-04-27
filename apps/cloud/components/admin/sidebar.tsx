@@ -14,6 +14,7 @@ import {
   MessageSquare,
   PieChart,
   Receipt,
+  Ticket,
   Users,
   X,
 } from "lucide-react";
@@ -31,6 +32,7 @@ const PRIMARY_NAV: NavItem[] = [
   { label: "Dashboard", href: "/admin/dashboard", icon: Home },
   { label: "Booth", href: "/admin/booths", icon: MapPin },
   { label: "Frame", href: "/admin/frames", icon: FrameIcon },
+  { label: "Voucher", href: "/admin/voucher", icon: Ticket },
 ];
 
 const SECONDARY_NAV: NavItem[] = [

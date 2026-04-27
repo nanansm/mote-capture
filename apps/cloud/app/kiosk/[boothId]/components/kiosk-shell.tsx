@@ -27,6 +27,7 @@ import { ProcessingState } from "./states/processing";
 import { PreviewState } from "./states/preview";
 import { InputKontakState } from "./states/input-kontak";
 import { DoneState } from "./states/done";
+import { VoucherInputState } from "./states/voucher-input";
 
 type FrameOption = KioskBootData["frames"][number];
 
@@ -57,6 +58,9 @@ export function KioskShell(props: Props) {
   const [doneCountdown, setDoneCountdown] = useState(8);
   const [flashing, setFlashing] = useState(false);
   const socketRef = useRef<Socket | null>(null);
+  // Latch that prevents START_CAPTURE from being emitted twice in one session.
+  // Cleared on RESET via the IDLE effect below.
+  const captureStartedRef = useRef(false);
 
   // Sync language from translation hook into machine context
   useEffect(() => {
@@ -145,6 +149,12 @@ export function KioskShell(props: Props) {
 
   // ── State-specific timers ──────────────────────────────────────────────
 
+  // Reset the per-session capture-started latch when we return to IDLE,
+  // so the next session emits START_CAPTURE again at its own CHEESE moment.
+  useEffect(() => {
+    if (state === "IDLE") captureStartedRef.current = false;
+  }, [state]);
+
   // PAYMENT timeout — auto cancel when QR expires
   useEffect(() => {
     if (state !== "PAYMENT" || !context.paymentExpiresAt) return;
@@ -157,15 +167,60 @@ export function KioskShell(props: Props) {
     return () => window.clearTimeout(id);
   }, [state, context.paymentExpiresAt]);
 
-  // COUNTDOWN: tick from 5 → 0, then wait for PHOTO_TAKEN socket event
+  // COUNTDOWN orchestration: GET_READY (photo 1 only) → 3 → 2 → 1 → CHEESE.
+  // After the CHEESE flash, we hold and wait for the bridge's PHOTO_TAKEN
+  // socket event to advance the step (the actual shutter timing is owned by
+  // the camera driver, not the UI).
   useEffect(() => {
     if (state !== "COUNTDOWN") return;
-    if (context.countdownNumber <= 0) return;
-    const id = window.setTimeout(() => {
-      dispatch({ type: "COUNTDOWN_TICK", value: context.countdownNumber - 1 });
-    }, KIOSK_TIMING.COUNTDOWN_TICK_MS);
-    return () => window.clearTimeout(id);
-  }, [state, context.countdownNumber]);
+    const phase = context.countdownPhase;
+
+    if (phase === "GET_READY") {
+      const id = window.setTimeout(() => {
+        dispatch({ type: "COUNTDOWN_PHASE", phase: "COUNTDOWN" });
+        dispatch({ type: "COUNTDOWN_TICK", value: 3 });
+      }, KIOSK_TIMING.GET_READY_MS);
+      return () => window.clearTimeout(id);
+    }
+
+    if (phase === "COUNTDOWN") {
+      if (context.countdownNumber > 1) {
+        const id = window.setTimeout(() => {
+          dispatch({ type: "COUNTDOWN_TICK", value: context.countdownNumber - 1 });
+        }, KIOSK_TIMING.COUNTDOWN_TICK_MS);
+        return () => window.clearTimeout(id);
+      }
+      // We just rendered "1" — after one tick, swap to CHEESE.
+      const id = window.setTimeout(() => {
+        dispatch({ type: "COUNTDOWN_PHASE", phase: "CHEESE" });
+      }, KIOSK_TIMING.COUNTDOWN_TICK_MS);
+      return () => window.clearTimeout(id);
+    }
+
+    // CHEESE: tell the cloud to fire the bridge shutter for photo 1 — gated
+    // by captureStartedRef so we only emit once per session even if the
+    // CHEESE phase re-renders. Photos 2 & 3 are auto-cascaded by the cloud
+    // when each PHOTO_UPLOADED arrives, so no per-photo emit is needed here.
+    if (
+      phase === "CHEESE" &&
+      context.countdownStep === 1 &&
+      context.sessionId &&
+      !captureStartedRef.current
+    ) {
+      captureStartedRef.current = true;
+      socketRef.current?.emit(
+        SocketEvents.START_CAPTURE,
+        { sessionId: context.sessionId },
+        (ack: { ok: boolean; error?: string }) => {
+          if (!ack?.ok) {
+            toast.error(ack?.error ?? "Gagal memulai foto");
+            captureStartedRef.current = false;
+            dispatch({ type: "RESET" });
+          }
+        },
+      );
+    }
+  }, [state, context.countdownPhase, context.countdownNumber, context.countdownStep, context.sessionId]);
 
   // PROCESSING timeout fallback
   useEffect(() => {
@@ -224,25 +279,63 @@ export function KioskShell(props: Props) {
     dispatch({ type: "FRAME_PICKED", frame });
   }, []);
 
-  const handleConfirmPay = useCallback(async () => {
-    if (!context.selectedFrame) return;
+  // Both method buttons share the same session creation: the cloud creates
+  // the session row + (mock or real) Xendit QR, and the only thing that
+  // differs is which next state we transition to. The voucher path ignores
+  // the QR string but still needs sessionId from the PAYMENT_QR socket event.
+  //
+  // Idempotent on two axes:
+  //   - if context.sessionId is already set, we skip the emit entirely
+  //     (e.g. user navigates Voucher → Back → Voucher quickly)
+  //   - sessionInFlightRef guards against rapid double-clicks while the
+  //     first emit is still awaiting its ack
+  const sessionInFlightRef = useRef(false);
+  const requestSession = useCallback(async () => {
+    if (context.sessionId) return true;
+    if (sessionInFlightRef.current) return true;
+    if (!context.selectedFrame) return false;
+    sessionInFlightRef.current = true;
     setBusy(true);
     try {
-      socketRef.current?.emit(
-        SocketEvents.CONFIRM_AND_PAY,
-        { boothId: props.boothId, frameId: context.selectedFrame.id },
-        (ack: { ok: boolean; error?: string }) => {
-          if (!ack?.ok) {
-            toast.error(ack?.error ?? "Gagal membuat sesi");
-            dispatch({ type: "RESET" });
-          }
-        },
-      );
-      dispatch({ type: "CONFIRM_PAY" });
+      const ok = await new Promise<boolean>((resolve) => {
+        socketRef.current?.emit(
+          SocketEvents.CONFIRM_AND_PAY,
+          { boothId: props.boothId, frameId: context.selectedFrame!.id },
+          (ack: { ok: boolean; error?: string }) => {
+            if (!ack?.ok) {
+              toast.error(ack?.error ?? "Gagal membuat sesi");
+              dispatch({ type: "RESET" });
+              resolve(false);
+              return;
+            }
+            resolve(true);
+          },
+        );
+      });
+      return ok;
     } finally {
+      sessionInFlightRef.current = false;
       setBusy(false);
     }
-  }, [context.selectedFrame, props.boothId]);
+  }, [context.sessionId, context.selectedFrame, props.boothId]);
+
+  const handleChooseCashless = useCallback(async () => {
+    const ok = await requestSession();
+    if (ok) dispatch({ type: "CHOOSE_CASHLESS" });
+  }, [requestSession]);
+
+  const handleChooseVoucher = useCallback(async () => {
+    // Dispatch first so the user sees VOUCHER_INPUT immediately. The session
+    // creation runs in background and the input page shows a "preparing"
+    // loading state until sessionId arrives via PAYMENT_QR. If the request
+    // fails, requestSession dispatches RESET internally to bail out cleanly.
+    dispatch({ type: "CHOOSE_VOUCHER" });
+    void requestSession();
+  }, [requestSession]);
+
+  const handleVoucherRedeemed = useCallback((sessionId: string) => {
+    dispatch({ type: "VOUCHER_REDEEMED", sessionId });
+  }, []);
 
   const handleCancelPayment = useCallback(() => {
     if (!confirm(t("kiosk.cancel.confirm"))) return;
@@ -252,13 +345,11 @@ export function KioskShell(props: Props) {
 
   const handleStartCapture = useCallback(() => {
     if (!context.sessionId) return;
-    socketRef.current?.emit(
-      SocketEvents.START_CAPTURE,
-      { sessionId: context.sessionId },
-      (ack: { ok: boolean; error?: string }) => {
-        if (!ack?.ok) toast.error(ack?.error ?? "Gagal memulai foto");
-      },
-    );
+    // Don't emit START_CAPTURE here — the bridge captures the moment cloud
+    // forwards it, which would fire the shutter ~10s before the guest sees
+    // "CHEESE!" because of the GET_READY pre-phase. Instead, the COUNTDOWN
+    // orchestrator emits it when the CHEESE phase of photo 1 begins.
+    captureStartedRef.current = false;
     dispatch({ type: "ENTER_COUNTDOWN" });
   }, [context.sessionId]);
 
@@ -290,7 +381,7 @@ export function KioskShell(props: Props) {
   }, []);
 
   // Hide language toggle for immersive states
-  const showLangToggle = !["COUNTDOWN", "PROCESSING"].includes(state);
+  const showLangToggle = !["COUNTDOWN", "PROCESSING", "VOUCHER_INPUT"].includes(state);
 
   const renderState = useMemo(() => {
     switch (state) {
@@ -312,14 +403,26 @@ export function KioskShell(props: Props) {
           <KonfirmasiState
             frame={context.selectedFrame as FrameOption}
             onBack={() => dispatch({ type: "BACK" })}
-            onConfirm={handleConfirmPay}
+            onChooseCashless={handleChooseCashless}
+            onChooseVoucher={handleChooseVoucher}
             busy={busy}
             t={t}
           />
         ) : null;
+      case "VOUCHER_INPUT":
+        return (
+          <VoucherInputState
+            sessionId={context.sessionId}
+            boothId={props.boothId}
+            onBack={() => dispatch({ type: "BACK" })}
+            onRedeemed={handleVoucherRedeemed}
+            t={t}
+          />
+        );
       case "PAYMENT":
         return (
           <PaymentState
+            sessionId={context.sessionId}
             qrString={context.qrString}
             amount={context.amount}
             expiresAt={context.paymentExpiresAt}
@@ -335,6 +438,7 @@ export function KioskShell(props: Props) {
           <CountdownState
             step={context.countdownStep}
             number={context.countdownNumber}
+            phase={context.countdownPhase}
             flashing={flashing}
             t={t}
           />
@@ -355,7 +459,7 @@ export function KioskShell(props: Props) {
       case "DONE":
         return <DoneState countdown={doneCountdown} t={t} />;
     }
-  }, [state, context, frames, busy, flashing, doneCountdown, t, handleStart, handleFramePicked, handleConfirmPay, handleCancelPayment, handleStartCapture, handleSubmitContact, handleSkipContact, props.defaultPrice]);
+  }, [state, context, frames, busy, flashing, doneCountdown, t, handleStart, handleFramePicked, handleChooseCashless, handleChooseVoucher, handleVoucherRedeemed, handleCancelPayment, handleStartCapture, handleSubmitContact, handleSkipContact, props.defaultPrice, props.boothId]);
 
   return (
     <>

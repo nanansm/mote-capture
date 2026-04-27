@@ -11,6 +11,7 @@ import { HeartbeatLoop } from "./handlers/heartbeat";
 import { createTray, setTrayState, destroyTray } from "./tray";
 import { showConfigWindow, getOrCreateConfigWindow, setAppQuitting } from "./window";
 import { registerIpc } from "./ipc";
+import { startLocalServer, type LocalServer } from "./local-server";
 import type { BridgeConfig } from "../shared/types";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -20,10 +21,19 @@ const BRIDGE_VERSION = pkg.version;
 let client: SocketClient | null = null;
 let handlers: BridgeHandlers | null = null;
 let heartbeat: HeartbeatLoop | null = null;
+let localServer: LocalServer | null = null;
 
 async function bootstrap(): Promise<void> {
   ensureDirs();
   logger.info("bridge_start", { version: BRIDGE_VERSION, platform: process.platform });
+
+  // Start the local HTTP proxy early so the kiosk can hit /live-preview
+  // even if cloud auth fails or the bridge token isn't set yet.
+  try {
+    localServer = await startLocalServer();
+  } catch (err) {
+    logger.warn("local_server_start_failed", { err: errMsg(err) });
+  }
 
   const store = await getStore();
   let config: BridgeConfig = store.store;
@@ -179,6 +189,7 @@ app.on("before-quit", () => {
   setAppQuitting();
   heartbeat?.stop();
   client?.disconnect();
+  void localServer?.close();
   destroyTray();
 });
 

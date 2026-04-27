@@ -76,6 +76,18 @@ export class BridgeHandlers {
     const photoIndex = payload.photoIndex ?? ctx.photos.size + 1;
     logger.info("handler_capture", { sessionId, photoIndex });
 
+    // Best-effort: kick the camera's live view on the first capture of a
+    // session so the kiosk's countdown overlay has a real preview to render.
+    // Cameras without a live view (mock, gphoto2, webcam-mac) silently no-op.
+    if (photoIndex === 1 && this.camera.startLiveView) {
+      await this.camera.startLiveView().catch((err) => {
+        logger.debug("handler_live_view_start_failed", {
+          sessionId,
+          err: errMsg(err),
+        });
+      });
+    }
+
     try {
       const cap = await this.camera.capture();
       // Keep the full-quality original in the session map - composite/print
@@ -210,6 +222,11 @@ export class BridgeHandlers {
       this.deps.client.emitSocket(SocketEvents.PRINT_COMPLETED, {
         sessionId: payload.sessionId,
       });
+      // Best-effort: close the camera's live view so the next session starts
+      // from a clean state (also relieves the camera battery on long shifts).
+      if (this.camera.stopLiveView) {
+        await this.camera.stopLiveView().catch(() => undefined);
+      }
       // Cleanup temp captures (keep composite for download).
       for (const [k, p] of ctx.photos) {
         if (k !== 99 && fs.existsSync(p)) {

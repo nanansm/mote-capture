@@ -5,9 +5,16 @@ import { logger } from "@/lib/logger";
 // Public R2 proxy. Required because some Indonesian ISPs (Indihome) MITM-block
 // `*.r2.dev` public URLs with a fake cert. We fetch via the R2 admin endpoint
 // (`*.r2.cloudflarestorage.com`) which is reachable, then stream back to the
-// client. Only allows a fixed list of public asset prefixes — never proxies
-// raw `sessions/*` keys (those go through the signed `/api/share` endpoints).
-const PUBLIC_PREFIXES = ["frames/", "backgrounds/", "logos/", "previews/"];
+// client. `sessions/` is included so the kiosk can render thumbnails during
+// capture and the share page can display photos — keys embed a random session
+// UUID + photo index, so they're effectively unguessable.
+const PUBLIC_PREFIXES = [
+  "frames/",
+  "backgrounds/",
+  "logos/",
+  "previews/",
+  "sessions/",
+];
 
 const EXT_CONTENT_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -15,6 +22,7 @@ const EXT_CONTENT_TYPES: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".gif": "image/gif",
+  ".svg": "image/svg+xml",
 };
 
 type Ctx = { params: Promise<{ key: string[] }> };

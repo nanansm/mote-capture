@@ -9,7 +9,12 @@ import type { useTranslation } from "@/lib/i18n/use-translation";
 
 type T = ReturnType<typeof useTranslation>["t"];
 
+// Inlined at build time by Next.js, so the dev panel disappears entirely
+// from production bundles — not just hidden via runtime check.
+const IS_DEV = process.env.NODE_ENV !== "production";
+
 export function PaymentState({
+  sessionId,
   qrString,
   amount,
   expiresAt,
@@ -17,6 +22,7 @@ export function PaymentState({
   onCancel,
   t,
 }: {
+  sessionId?: string;
   qrString?: string;
   amount?: number;
   expiresAt?: string;
@@ -122,9 +128,51 @@ export function PaymentState({
                 ⚠ {t("kiosk.payment.mock")}
               </p>
             ) : null}
+
+            {IS_DEV && sessionId ? <DevMockPayPanel sessionId={sessionId} /> : null}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DevMockPayPanel({ sessionId }: { sessionId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <div className="mt-6 rounded-lg border-2 border-dashed border-orange-400 bg-orange-50/60 p-4">
+      <p className="mb-2 font-mono text-xs font-bold uppercase tracking-wider text-orange-600">
+        ⚠ DEV MODE — bypass Xendit
+      </p>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setErr(null);
+          try {
+            const res = await fetch(`/api/dev/mock-pay/${sessionId}`, { method: "POST" });
+            const data: { ok?: boolean; error?: string } = await res.json().catch(() => ({}));
+            if (!res.ok || !data.ok) {
+              setErr(data.error ?? `HTTP ${res.status}`);
+              console.error("[DEV] mock-pay failed", data);
+            } else {
+              console.log("[DEV] mock-pay ok", data);
+            }
+          } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+          } finally {
+            setBusy(false);
+          }
+        }}
+        className="w-full rounded-lg bg-orange-500 px-6 py-3 font-bold text-white shadow-sm transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {busy ? "..." : "🧪 MOCK PAY (Skip Xendit)"}
+      </button>
+      {err ? (
+        <p className="mt-2 font-mono text-xs text-red-600">Error: {err}</p>
+      ) : null}
     </div>
   );
 }
