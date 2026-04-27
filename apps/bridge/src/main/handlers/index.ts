@@ -2,11 +2,13 @@
 // camera/printer/composer drivers. Holds per-session state in memory so
 // multiple sequential photo events can compose into one print.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import { logger } from "../logger";
 import { errMsg, type CloudClient } from "../cloud-api";
 import { createCamera, type CameraDevice } from "../camera";
 import { createPrinter, type PrinterDevice } from "../printer";
 import { compose } from "../image/composer";
+import { ensureWithinSizeLimit } from "../image/compress";
 import { getCachedFrame } from "../image/frame-cache";
 import { tempFile } from "../paths";
 import type { SocketClient } from "../socket-client";
@@ -76,14 +78,35 @@ export class BridgeHandlers {
 
     try {
       const cap = await this.camera.capture();
+      // Keep the full-quality original in the session map - composite/print
+      // happens locally and benefits from the extra pixels.
       ctx.photos.set(photoIndex, cap.filePath);
-      const upload = await this.deps.cloud.uploadPhoto(sessionId, cap.filePath, photoIndex);
+
+      // The cloud rejects > 5 MB bodies; resize+recompress if needed before
+      // upload. The compressed temp file is separate from the original so
+      // composite still gets the high-res source.
+      const compressed = await ensureWithinSizeLimit(cap.filePath);
+      const upload = await this.deps.cloud.uploadPhoto(
+        sessionId,
+        compressed.uploadPath,
+        photoIndex,
+      );
+      if (compressed.compressed) {
+        await fsp.unlink(compressed.uploadPath).catch(() => undefined);
+      }
+
       this.deps.client.emitSocket(SocketEvents.PHOTO_UPLOADED, {
         sessionId,
         index: photoIndex,
         url: upload.url,
       });
-      logger.info("handler_capture_uploaded", { sessionId, photoIndex, url: upload.url });
+      logger.info("handler_capture_uploaded", {
+        sessionId,
+        photoIndex,
+        url: upload.url,
+        uploadBytes: compressed.bytes,
+        compressed: compressed.compressed,
+      });
     } catch (err) {
       const message = errMsg(err);
       logger.error("handler_capture_failed", { sessionId, err: message });
