@@ -12,6 +12,7 @@ import { createTray, setTrayState, destroyTray } from "./tray";
 import { showConfigWindow, getOrCreateConfigWindow, setAppQuitting } from "./window";
 import { registerIpc } from "./ipc";
 import { startLocalServer, type LocalServer } from "./local-server";
+import { installCrashWatchdog, applyLoginItem } from "./watchdog";
 import type { BridgeConfig } from "../shared/types";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -26,6 +27,10 @@ let localServer: LocalServer | null = null;
 async function bootstrap(): Promise<void> {
   ensureDirs();
   logger.info("bridge_start", { version: BRIDGE_VERSION, platform: process.platform });
+
+  // Install crash handlers before anything else can throw, so a failure during
+  // the rest of bootstrap triggers a throttled relaunch instead of a dead app.
+  installCrashWatchdog();
 
   // Start the local HTTP proxy early so the kiosk can hit /live-preview
   // even if cloud auth fails or the bridge token isn't set yet.
@@ -44,6 +49,10 @@ async function bootstrap(): Promise<void> {
     hasToken: !!config.bridgeToken,
     boothId: config.boothId,
   });
+
+  // Sync the OS login item to the persisted preference on every boot, so the
+  // setting self-heals if the registry entry was removed out-of-band.
+  applyLoginItem(config.autoStart);
 
   // If boothId is missing but token is present, try to resolve from cloud.
   if (config.bridgeToken && !config.boothId) {

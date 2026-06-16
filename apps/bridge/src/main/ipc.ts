@@ -9,6 +9,7 @@ import type { BridgeHandlers } from "./handlers";
 import type { SocketClient } from "./socket-client";
 import type { HeartbeatLoop } from "./handlers/heartbeat";
 import { getConfigWindow } from "./window";
+import { applyLoginItem } from "./watchdog";
 
 export type IpcServices = {
   client: SocketClient;
@@ -41,6 +42,11 @@ export function registerIpc(services: IpcServices): void {
     store.set(safe);
     const newConfig = store.store;
     logger.info("config_saved", { changedKeys: Object.keys(safe) });
+    // Apply login-item changes immediately so the toggle takes effect without
+    // requiring a restart.
+    if (Object.prototype.hasOwnProperty.call(safe, "autoStart")) {
+      applyLoginItem(newConfig.autoStart);
+    }
     await services.reconnectWithConfig(newConfig);
     return newConfig;
   });

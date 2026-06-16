@@ -40,6 +40,14 @@ win:
     - target: portable
       arch:
         - x64
+  # digiCamControl installer is bundled into the .exe and silently installed by
+  # assets/installer.nsh if not already present. Drop the binary at
+  # installer-deps/digiCamControl-setup.exe before building on Windows
+  # (see installer-deps/README.md). win-scoped so the mac smoke build does not
+  # need it.
+  extraResources:
+    - from: installer-deps/digiCamControl-setup.exe
+      to: digiCamControl-setup.exe
 
 linux:
   icon: assets/icon.png
@@ -54,3 +62,5 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Mote Capture Bridge
+  # Custom install/uninstall steps: bundle digiCamControl + kiosk Edge shortcuts.
+  include: assets/installer.nsh

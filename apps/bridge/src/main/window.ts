@@ -34,7 +34,7 @@ export function getOrCreateConfigWindow(): BrowserWindow {
 
   win.on("close", (event) => {
     // Hide instead of quit — quit only via tray menu.
-    if (!isAppQuitting) {
+    if (!appQuitting) {
       event.preventDefault();
       win?.hide();
     }
@@ -63,9 +63,13 @@ export function toggleConfigWindow(): void {
   }
 }
 
-let isAppQuitting = false;
+let appQuitting = false;
 export function setAppQuitting(): void {
-  isAppQuitting = true;
+  appQuitting = true;
+}
+
+export function isAppQuitting(): boolean {
+  return appQuitting;
 }
 
 export function getConfigWindow(): BrowserWindow | null {
