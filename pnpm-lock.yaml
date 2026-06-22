@@ -21,9 +21,6 @@ importers:
 
   apps/bridge:
     dependencies:
-      '@capture/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       axios:
         specifier: ^1.7.9
         version: 1.15.2
@@ -46,6 +43,9 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0(winston@3.19.0)
     devDependencies:
+      '@capture/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@types/node':
         specifier: ^20.16.10
         version: 20.19.39
