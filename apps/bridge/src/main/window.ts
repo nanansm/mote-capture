@@ -1,5 +1,5 @@
 // Manages the singleton config BrowserWindow.
-import { BrowserWindow } from "electron";
+import { app, BrowserWindow } from "electron";
 import path from "node:path";
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL ?? "http://localhost:5174";
@@ -25,7 +25,11 @@ export function getOrCreateConfigWindow(): BrowserWindow {
     },
   });
 
-  if (process.env.NODE_ENV !== "production") {
+  // A packaged build must always load the built renderer from disk. NODE_ENV is
+  // not set to "production" in a packaged Electron app, so keying off it sent the
+  // packaged app to the (dead) Vite dev server and left the window blank. Use
+  // app.isPackaged, and only hit the dev server when one is actually configured.
+  if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL);
   } else {
     // Renderer is built to dist/renderer/index.html (Vite output).
