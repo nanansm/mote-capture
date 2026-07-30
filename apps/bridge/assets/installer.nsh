@@ -4,7 +4,7 @@
 ; NSIS context — do not re-include it here.
 
 ; URL the booth kiosk opens. Edit here if the cloud domain changes.
-!define MOTE_KIOSK_URL "https://capture.motekreatif.com"
+!define MOTE_KIOSK_URL "https://mote-capture.smnanan.workers.dev"
 
 !macro customInstall
   ; --- 1. digiCamControl: install the bundled setup if not already present ---

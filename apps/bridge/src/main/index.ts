@@ -13,6 +13,7 @@ import { showConfigWindow, getOrCreateConfigWindow, setAppQuitting } from "./win
 import { registerIpc } from "./ipc";
 import { startLocalServer, type LocalServer } from "./local-server";
 import { installCrashWatchdog, applyLoginItem } from "./watchdog";
+import { updateKioskShortcuts } from "./kiosk-shortcut";
 import type { BridgeConfig } from "../shared/types";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -115,6 +116,12 @@ async function bootstrap(): Promise<void> {
           newConfig = store.store;
         }
       }
+
+      // Now that boothId (and cloudUrl) are final for this save, rewrite the
+      // installer's kiosk Edge shortcuts to the actual kiosk screen instead
+      // of the domain root. No-op off Windows or while boothId/cloudUrl are
+      // still unset.
+      updateKioskShortcuts(newConfig.cloudUrl, newConfig.boothId);
 
       // Replace handlers' cloud + config + devices.
       await handlers!.rebuildDevices(newConfig);

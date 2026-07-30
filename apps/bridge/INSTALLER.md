@@ -2,7 +2,7 @@
 
 Single self-contained `.exe` for a new booth PC. **No Node, git, clone, or
 internet required at install time** (digiCamControl is bundled). The booth UI
-stays in the cloud (`capture.motekreatif.com`) and is opened via Edge kiosk.
+stays in the cloud (`mote-capture.smnanan.workers.dev`) and is opened via Edge kiosk.
 
 > This is the active installer path. The older `installer/` folder (Inno Setup,
 > git-clone-at-install approach) is **deprecated** — ignore it.
@@ -13,12 +13,24 @@ stays in the cloud (`capture.motekreatif.com`) and is opened via Edge kiosk.
 2. Silently installs **digiCamControl** if not already present (bundled; raises one UAC prompt).
 3. Adds **digiCamControl GUI** to Startup (camera webserver must be running).
 4. Creates **kiosk Edge** shortcuts (Desktop + Startup) →
-   `msedge --kiosk https://capture.motekreatif.com --edge-kiosk-type=fullscreen`.
+   `msedge --kiosk https://mote-capture.smnanan.workers.dev --edge-kiosk-type=fullscreen`.
 5. Bridge auto-starts at login (login item, set from the config toggle) and
    auto-restarts itself on crash (throttled watchdog).
 
 Result at every login: digiCamControl + bridge (tray) + Edge kiosk all start
 hands-off.
+
+## Shortcut kiosk otomatis diperbaiki setelah konfigurasi
+
+Saat instalasi, booth ID belum diketahui — jadi shortcut kiosk (Desktop +
+Startup) yang dibuat installer sementara mengarah ke akar domain
+(`mote-capture.smnanan.workers.dev`), yang cuma redirect ke `/admin`, bukan
+layar kiosk. Begitu operator mengisi **Cloud URL** + **Bridge Token** di
+config window dan token itu berhasil diresolve jadi **Booth ID**, bridge
+langsung menulis ulang kedua shortcut tersebut supaya menunjuk
+`<cloudUrl>/kiosk/<boothId>`. Operator **tidak perlu** mengedit properti
+shortcut secara manual per booth — cukup Save sekali, lalu buka ulang
+shortcut (atau reboot) untuk melihat layar kiosk yang benar.
 
 ## Build (must run on Windows x64)
 

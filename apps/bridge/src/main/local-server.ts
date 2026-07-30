@@ -7,7 +7,7 @@
 //   GET /live-preview  -> proxies digiCamControl webserver /liveview.jpg
 //
 // The proxy adds permissive CORS headers so the cloud-served kiosk page
-// (capture.motekreatif.com) can <img src="http://localhost:LOCAL_PORT/...">
+// (mote-capture.smnanan.workers.dev) can <img src="http://localhost:LOCAL_PORT/...">
 // without browser CORS blocking. Binding to 127.0.0.1 keeps it private to
 // the booth machine — nothing on the LAN can reach it.
 import http from "node:http";
@@ -18,11 +18,15 @@ export const DEFAULT_LOCAL_PORT = 9876;
 const DIGICAM_LIVE_VIEW_URL = "http://127.0.0.1:5513/liveview.jpg";
 
 // Match the cloud's deployed domains plus localhost so the kiosk can run
-// either against prod or a dev server.
+// either against prod or a dev server. The cloud moved from the old VPS
+// domain to Cloudflare Workers, so the workers.dev host is listed too —
+// pinned to this one Worker, NOT `*.workers.dev`: that wildcard would let
+// any Cloudflare user's page read this booth's live view and photos.
 const CORS_ORIGIN_ALLOWLIST = [
   /^https?:\/\/localhost(:\d+)?$/,
   /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
   /^https?:\/\/(.+\.)?motekreatif\.com$/,
+  /^https:\/\/mote-capture\.smnanan\.workers\.dev$/,
 ];
 
 function corsHeadersFor(origin: string | undefined): Record<string, string> {
