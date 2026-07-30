@@ -14,6 +14,17 @@
     "head_sampling_rate": 1
   },
 
+  // Keep the workers.dev URL alive. This must stay explicit: adding any
+  // `routes` entry silently disables workers.dev unless this is set, which
+  // takes the whole site down on the old URL.
+  "workers_dev": true,
+
+  // Custom Domain for capture.motekreatif.com is NOT enabled yet: the zone
+  // still has an A record for that hostname pointing at the retired VPS, and
+  // Cloudflare rejects the domain attachment with 409 Conflict until it is
+  // removed. Re-add once the A record is gone:
+  //   "routes": [{ "pattern": "capture.motekreatif.com", "custom_domain": true }]
+
   "assets": {
     "directory": "../web/dist",
     "binding": "ASSETS",
