@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "allowJs": false,
+    "useDefineForClassFields": true,
+    // Ported components read arrays by index in a few places (e.g. the kiosk
+    // state machine, numpad rows) written against apps/cloud's looser tsconfig
+    // (strict, but no noUncheckedIndexedAccess). Overriding it back off here
+    // keeps the port mechanical instead of a type-safety rewrite.
+    "noUncheckedIndexedAccess": false,
+    "types": ["vite/client"],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src"]
+}

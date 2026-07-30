@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Brand colors Mote Kreatif */
+    --brand-yellow: 245 230 66;
+    --brand-green-dark: 26 58 42;
+    --brand-orange: 249 115 22;
+    --brand-pink: 232 165 152;
+    --brand-green-light: 134 198 124;
+    --brand-cream: 245 240 232;
+
+    /* shadcn tokens (HSL components, no hsl() wrapper) */
+    --background: 0 0% 100%;
+    --foreground: 154 39% 16%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 154 39% 16%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 154 39% 16%;
+
+    --primary: 154 39% 16%;
+    --primary-foreground: 56 91% 61%;
+
+    --secondary: 36 33% 94%;
+    --secondary-foreground: 154 39% 16%;
+
+    --muted: 36 33% 94%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 56 91% 61%;
+    --accent-foreground: 154 39% 16%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 154 39% 16%;
+
+    --radius: 1rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer utilities {
+  .blob-yellow {
+    background: radial-gradient(
+      circle at center,
+      rgb(var(--brand-yellow) / 0.55) 0%,
+      rgb(var(--brand-yellow) / 0) 70%
+    );
+    filter: blur(40px);
+  }
+  .blob-pink {
+    background: radial-gradient(
+      circle at center,
+      rgb(var(--brand-pink) / 0.45) 0%,
+      rgb(var(--brand-pink) / 0) 70%
+    );
+    filter: blur(60px);
+  }
+}
