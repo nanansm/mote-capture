@@ -49,6 +49,21 @@ const RESTART_DELAY_MS = 1_500;
 const MAX_RESTARTS_PER_WINDOW = 5;
 const RESTART_WINDOW_MS = 60_000;
 
+// Windows does not release the exclusive dshow handle the instant the owning
+// process is killed, so a spawn that follows a kill too closely dies with
+// "Could not run graph (sometimes caused by another application)". That is
+// exactly what happens when the user hits Save Mode in the config UI: handlers
+// tears down the old camera and builds a new one within ~150 ms, and the first
+// Test Capture after the swap goes red before self-healing 1.5 s later.
+//
+// The timestamp is module-scoped on purpose. The process that held the device
+// belongs to the PREVIOUS camera instance, so a per-instance field would not
+// see it — both instances live in this same Electron main process, so a shared
+// timestamp is what makes the swap ordered instead of racy.
+const SPAWN_SETTLE_MS = 700;
+const PROC_EXIT_TIMEOUT_MS = 3_000;
+let lastDshowReleaseAt = 0;
+
 function ffmpegCandidates(explicitPath?: string): string[] {
   const list: string[] = [];
   if (explicitPath && explicitPath.trim().length > 0) list.push(explicitPath.trim());
@@ -193,6 +208,21 @@ export class WebcamWinCamera implements CameraDevice {
     if (this.proc || this.stopping) return;
     if (!this.binPath) return;
 
+    // Let the previous owner's handle actually go away first (see
+    // SPAWN_SETTLE_MS). Reuses restartTimer so at most one pending spawn
+    // exists at a time.
+    const sinceRelease = Date.now() - lastDshowReleaseAt;
+    if (sinceRelease < SPAWN_SETTLE_MS) {
+      if (this.restartTimer) return;
+      const waitMs = SPAWN_SETTLE_MS - sinceRelease;
+      logger.debug("camera_webcam_win_spawn_deferred", { waitMs });
+      this.restartTimer = setTimeout(() => {
+        this.restartTimer = null;
+        this.startStream();
+      }, waitMs);
+      return;
+    }
+
     const args = [
       "-hide_banner",
       "-loglevel",
@@ -230,6 +260,9 @@ export class WebcamWinCamera implements CameraDevice {
     proc.on("close", (code) => {
       const wasCurrent = this.proc === proc;
       if (wasCurrent) this.proc = null;
+      // The handle is only free once the process is really gone — record it
+      // here, not at kill() time, so the next spawn waits from the right point.
+      lastDshowReleaseAt = Date.now();
       if (this.stopping) return;
       logger.warn("camera_webcam_win_stream_closed", {
         code,
@@ -361,9 +394,25 @@ export class WebcamWinCamera implements CameraDevice {
     const proc = this.proc;
     this.proc = null;
     if (proc) {
+      // Await the real exit (bounded) instead of firing kill() and returning.
+      // handlers awaits cleanup() before constructing the replacement camera,
+      // so this is what makes a config-save swap ordered rather than a race
+      // for the dshow handle.
+      const exited = new Promise<void>((resolve) => {
+        let settled = false;
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        proc.once("close", done);
+        setTimeout(done, PROC_EXIT_TIMEOUT_MS);
+      });
+      proc.kill();
+      await exited;
       proc.stdout.removeAllListeners();
       proc.stderr.removeAllListeners();
-      proc.kill();
+      lastDshowReleaseAt = Date.now();
     }
     this.acc = Buffer.alloc(0);
     this.latestFrame = null;
