@@ -1,0 +1,77 @@
+{
+  // apps/api — single Cloudflare Worker serving:
+  //  - static SPA assets (built by apps/web, task T4.1)
+  //  - HTTP API (Hono) under /api/*
+  //  - 2 Durable Objects (BoothDO, AdminDO) under /ws/*
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mote-capture",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/ws/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mote-capture",
+      "database_id": "99985905-ca0f-4e8d-9034-ab85e512824b"
+    }
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "mote-capture-prod"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "BOOTH_DO", "class_name": "BoothDO" },
+      { "name": "ADMIN_DO", "class_name": "AdminDO" }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      // Durable Objects free plan only supports the SQLite storage backend —
+      // must be new_sqlite_classes, NOT new_classes.
+      "new_sqlite_classes": ["BoothDO", "AdminDO"]
+    }
+  ],
+
+  // T2.9: global sweeps that don't belong to any single booth's DO —
+  // offline-booth alerting + GC of sessions stuck in "payment" past expiry.
+  // See src/scheduled.ts for the handler. Every 5 minutes.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
+  "vars": {
+    "PUBLIC_CDN_URL": "https://cdn.motekreatif.com",
+    // Used to build customer-facing share links (/share/:token) — must be the
+    // URL customers actually reach. Change this when the custom domain
+    // (capture.motekreatif.com) is cut over.
+    "APP_URL": "https://mote-capture.smnanan.workers.dev",
+    "DOWNLOAD_LINK_EXPIRY_DAYS": "7",
+    // Resend rejects any sender whose domain is not verified on the account.
+    // send.essentiallyour.com is the only verified domain there (Tokyo region);
+    // motekreatif.com is NOT verified, so it cannot be used as a sender yet.
+    // The fallback in src/lib/email.ts (onboarding@resend.dev) only reaches the
+    // Resend account owner's own address, so it is unusable for customers.
+    "EMAIL_FROM": "noreply@send.essentiallyour.com",
+    "EMAIL_FROM_NAME": "Mote Capture"
+  }
+}
