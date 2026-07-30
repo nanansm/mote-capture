@@ -21,6 +21,7 @@ import type { Bindings } from "@/lib/env";
 import { getDb, schema } from "@/db";
 import { logger } from "@/lib/logger";
 import { getPaymentProvider } from "@/lib/payment";
+import { resolveCredentials } from "@/lib/runtime-credentials";
 import { markExpired, markPaid } from "@/do/rpc";
 
 const webhook = new Hono<{ Bindings: Bindings }>();
@@ -35,7 +36,11 @@ webhook.post("/xendit", async (c) => {
   });
 
   const db = getDb(c.env.DB);
-  const provider = getPaymentProvider("xendit", c.env);
+  // Webhook token has to come from the same source as the key that created the
+  // QR — otherwise rotating credentials in the UI would start rejecting live
+  // callbacks as invalid signatures.
+  const { xendit } = await resolveCredentials(db, c.env);
+  const provider = getPaymentProvider("xendit", c.env, xendit);
   const verification = await provider.verifyWebhook({ headers, body: rawBody });
 
   if (!verification.valid) {

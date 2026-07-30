@@ -15,12 +15,20 @@ export * from "./types";
 export { XenditProvider } from "./xendit";
 export type { XenditCredentials } from "./xendit";
 
-export function getPaymentProvider(name: PaymentProviderName, env: Bindings): PaymentProvider {
+// `credentials` wins over the Bindings fallback so an admin-entered key takes
+// effect on the next request without a deploy (lib/runtime-credentials.ts).
+// Callers that have a DB handle should always pass it; the env-only path
+// remains for contexts that genuinely have no database access.
+export function getPaymentProvider(
+  name: PaymentProviderName,
+  env: Bindings,
+  credentials?: { secretKey?: string; webhookToken?: string },
+): PaymentProvider {
   switch (name) {
     case "xendit":
       return new XenditProvider({
-        secretKey: env.XENDIT_SECRET_KEY,
-        webhookToken: env.XENDIT_WEBHOOK_TOKEN,
+        secretKey: credentials?.secretKey ?? env.XENDIT_SECRET_KEY,
+        webhookToken: credentials?.webhookToken ?? env.XENDIT_WEBHOOK_TOKEN,
       });
     case "ipaymu":
       throw new Error("iPaymu provider belum diimplementasikan (Sprint 2 hanya Xendit).");

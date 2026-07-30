@@ -32,31 +32,46 @@ export function formatPhoneNumber(input: string): string {
   return digits;
 }
 
-function evolutionConfigured(env: Env): boolean {
-  return Boolean(env.EVOLUTION_API_URL && env.EVOLUTION_API_KEY && env.EVOLUTION_INSTANCE_NAME);
+// Credentials may come from the admin UI (D1, encrypted) or from Worker
+// secrets. Callers resolve that ahead of time and pass the winner in; the env
+// fields stay as the fallback for callers that have no DB handle.
+export type EvolutionConfig = {
+  apiUrl?: string;
+  apiKey?: string;
+  instanceName?: string;
+};
+
+function resolveEvolution(env: Env, override?: EvolutionConfig): Required<EvolutionConfig> | null {
+  const apiUrl = override?.apiUrl ?? env.EVOLUTION_API_URL;
+  const apiKey = override?.apiKey ?? env.EVOLUTION_API_KEY;
+  const instanceName = override?.instanceName ?? env.EVOLUTION_INSTANCE_NAME;
+  if (!apiUrl || !apiKey || !instanceName) return null;
+  return { apiUrl, apiKey, instanceName };
 }
 
 export async function sendText(
   env: Env,
   params: { to: string; message: string },
+  credentials?: EvolutionConfig,
 ): Promise<SendTextResult> {
   const number = formatPhoneNumber(params.to);
   if (!number) {
     return { ok: false, mockMode: false, message: "Nomor tidak valid" };
   }
 
-  if (!evolutionConfigured(env)) {
+  const evolution = resolveEvolution(env, credentials);
+  if (!evolution) {
     logger.warn("wa_mock_send", { number, length: params.message.length });
     return { ok: true, mockMode: true, message: "Mock: WhatsApp tidak ter-konfigurasi" };
   }
 
-  const url = `${env.EVOLUTION_API_URL!.replace(/\/$/, "")}/message/sendText/${env.EVOLUTION_INSTANCE_NAME}`;
+  const url = `${evolution.apiUrl.replace(/\/$/, "")}/message/sendText/${evolution.instanceName}`;
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        apikey: env.EVOLUTION_API_KEY!,
+        apikey: evolution.apiKey,
       },
       body: JSON.stringify({ number, text: params.message }),
     });

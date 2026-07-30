@@ -18,6 +18,7 @@ import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { sendDownloadLinkEmail } from "@/lib/email";
 import { sendText } from "@/lib/wa";
+import { resolveCredentials } from "@/lib/runtime-credentials";
 import { formatDateID, getSetting, renderTemplate } from "@/lib/settings";
 import { logger } from "@/lib/logger";
 
@@ -57,7 +58,8 @@ export async function notifySession(env: Bindings, sessionId: string): Promise<N
       nama_booth: booth?.name ?? "Maja Photobooth",
       tanggal: formatDateID(new Date()),
     });
-    out.whatsapp = await sendText(cfg, { to: session.customerPhone, message: msg });
+    const { evolution } = await resolveCredentials(db, env);
+    out.whatsapp = await sendText(cfg, { to: session.customerPhone, message: msg }, evolution);
     logger.info("notify_whatsapp", {
       sessionId,
       ok: out.whatsapp.ok,

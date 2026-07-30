@@ -46,6 +46,7 @@ import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/db";
 import { getPaymentProvider } from "@/lib/payment";
+import { resolveCredentials } from "@/lib/runtime-credentials";
 import { generateDownloadToken, generateSessionId } from "@/lib/id";
 import { getPublicUrl, sessionAssetKey, uploadObject } from "@/lib/storage";
 import { notifySession } from "@/lib/notify";
@@ -459,7 +460,12 @@ export class BoothDO extends DurableObject<Bindings> {
       // doesn't linger forever — reuses the same qr_expiry alarm path.
       expiresAt = new Date(Date.now() + 5 * 60_000);
     } else {
-      const provider = getPaymentProvider(booth.paymentProvider as "xendit" | "ipaymu", this.env);
+      const { xendit } = await resolveCredentials(db, this.env);
+      const provider = getPaymentProvider(
+        booth.paymentProvider as "xendit" | "ipaymu",
+        this.env,
+        xendit,
+      );
       const qr = await provider.createQR({ sessionId, amount, expiresInMinutes: 5 });
       qrString = qr.qrString;
       paymentRef = qr.providerRef;

@@ -27,7 +27,9 @@ import { getEnv } from "@/lib/env";
 import type { AdminVariables } from "@/middleware/admin";
 import { requireAdmin } from "@/middleware/admin";
 import { getDb } from "@/db";
-import { getAllSettings, setSetting, type SettingMap } from "@/lib/settings";
+import { getAllSettings, getSetting, setSetting, type SettingMap } from "@/lib/settings";
+import { decryptSecret, encryptSecret, maskSecret } from "@/lib/secret-box";
+import { credentialSource, resolveCredentials, type CredentialSource } from "@/lib/runtime-credentials";
 import { logger } from "@/lib/logger";
 
 const settings = new Hono<{ Bindings: Bindings; Variables: AdminVariables }>();
@@ -39,10 +41,139 @@ const patchBodySchema = z.object({
   value: z.record(z.unknown()),
 });
 
+// Credentials are written through their own endpoint, never the generic PATCH:
+// they need encrypting on the way in, and a blank field has to mean "keep the
+// existing value" rather than "clear it" (the UI can't echo the current one
+// back for the user to retype).
+const CREDENTIAL_FIELDS = [
+  "xendit_secret_key",
+  "xendit_webhook_token",
+  "evolution_api_url",
+  "evolution_api_key",
+  "evolution_instance_name",
+] as const;
+
+const credentialsBodySchema = z.object({
+  xendit_secret_key: z.string().max(500).optional(),
+  xendit_webhook_token: z.string().max(500).optional(),
+  evolution_api_url: z.string().max(500).optional(),
+  evolution_api_key: z.string().max(500).optional(),
+  evolution_instance_name: z.string().max(200).optional(),
+  // Explicit opt-in to wipe a stored value and fall back to the Worker secret.
+  clear: z.array(z.enum(CREDENTIAL_FIELDS)).optional(),
+});
+
 settings.get("/", async (c) => {
   const db = getDb(c.env.DB);
   const all = await getAllSettings(db);
-  return c.json({ data: all });
+  // Never hand raw credentials back to the browser — an admin session is a
+  // cookie, and this endpoint is the one place the whole set would be
+  // reachable from. The UI only needs to know what is installed and where it
+  // came from, so it gets a masked view plus the source of each field.
+  const env = getEnv(c.env);
+  const stored = all.credentials;
+  const passphrase = c.env.SETTINGS_ENC_KEY;
+  const envFallback: Record<(typeof CREDENTIAL_FIELDS)[number], string | undefined> = {
+    xendit_secret_key: env.XENDIT_SECRET_KEY,
+    xendit_webhook_token: env.XENDIT_WEBHOOK_TOKEN,
+    evolution_api_url: env.EVOLUTION_API_URL,
+    evolution_api_key: env.EVOLUTION_API_KEY,
+    evolution_instance_name: env.EVOLUTION_INSTANCE_NAME,
+  };
+
+  const credentials: Record<string, { masked: string; source: CredentialSource }> = {};
+  let decryptFailed = false;
+  for (const field of CREDENTIAL_FIELDS) {
+    const envelope = stored[field];
+    const source = credentialSource(envelope, envFallback[field]);
+    let masked = "";
+    if (envelope && passphrase) {
+      const plain = await decryptSecret(envelope, passphrase);
+      if (plain === null) decryptFailed = true;
+      // The Evolution URL and instance name are not secrets — showing them in
+      // full is what makes the panel usable for spotting a wrong instance.
+      masked =
+        plain === null
+          ? ""
+          : field === "evolution_api_url" || field === "evolution_instance_name"
+            ? plain
+            : maskSecret(plain);
+    } else if (envelope && !passphrase) {
+      decryptFailed = true;
+    } else if (source === "server") {
+      masked =
+        field === "evolution_api_url" || field === "evolution_instance_name"
+          ? (envFallback[field] ?? "")
+          : maskSecret(envFallback[field] ?? "");
+    }
+    credentials[field] = { masked, source };
+  }
+
+  return c.json({
+    data: {
+      ...all,
+      credentials,
+      credentialsMeta: {
+        encryptionConfigured: Boolean(passphrase),
+        decryptFailed,
+      },
+    },
+  });
+});
+
+settings.patch("/credentials", async (c) => {
+  let json: unknown;
+  try {
+    json = await c.req.json();
+  } catch {
+    return c.json({ error: "Body tidak valid" }, 400);
+  }
+  const parsed = credentialsBodySchema.safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.issues[0]?.message ?? "Validasi gagal" }, 400);
+  }
+
+  const passphrase = c.env.SETTINGS_ENC_KEY;
+  if (!passphrase) {
+    // Refuse rather than silently storing a live payment key in plaintext.
+    return c.json(
+      {
+        error:
+          "SETTINGS_ENC_KEY belum diset di Worker. Jalankan sekali: " +
+          "`wrangler secret put SETTINGS_ENC_KEY` (isi dengan `openssl rand -base64 32`), " +
+          "lalu simpan kredensial lagi dari halaman ini.",
+      },
+      409,
+    );
+  }
+
+  const db = getDb(c.env.DB);
+  const current = await getSetting(db, "credentials");
+  const next = { ...current };
+  const toClear = new Set(parsed.data.clear ?? []);
+  const changed: string[] = [];
+
+  for (const field of CREDENTIAL_FIELDS) {
+    if (toClear.has(field)) {
+      next[field] = "";
+      changed.push(`${field}:cleared`);
+      continue;
+    }
+    const incoming = parsed.data[field];
+    // Blank/absent = leave the stored value alone. This is what lets the admin
+    // rotate only the Xendit key without re-typing the Evolution credentials.
+    if (incoming === undefined || incoming.trim() === "") continue;
+    next[field] = await encryptSecret(incoming.trim(), passphrase);
+    changed.push(field);
+  }
+
+  if (changed.length === 0) {
+    return c.json({ data: { changed: [] } });
+  }
+
+  await setSetting(db, "credentials", next);
+  logger.info("credentials_updated", { by: c.get("adminEmail"), fields: changed });
+  return c.json({ data: { changed } });
 });
 
 settings.patch("/", async (c) => {
@@ -87,6 +218,10 @@ settings.post("/test-connection", async (c) => {
   }
   const env = getEnv(c.env);
   const { service } = parsed.data;
+  // Test against whatever a real request would use, UI-entered credentials
+  // included — otherwise Test would keep reporting on the deployed secrets
+  // while checkout ran on the new ones.
+  const resolved = await resolveCredentials(getDb(c.env.DB), c.env);
 
   if (service === "email") {
     if (!env.RESEND_API_KEY) {
@@ -132,16 +267,19 @@ settings.post("/test-connection", async (c) => {
   }
 
   if (service === "whatsapp") {
-    if (!env.EVOLUTION_API_URL || !env.EVOLUTION_API_KEY || !env.EVOLUTION_INSTANCE_NAME) {
+    const { apiUrl, apiKey, instanceName } = resolved.evolution;
+    if (!apiUrl || !apiKey || !instanceName) {
       return c.json({
         success: false,
-        message: "EVOLUTION_API_URL/API_KEY/INSTANCE_NAME belum di-set.",
+        message: resolved.hasUndecryptable
+          ? "Kredensial Evolution tersimpan tapi tidak bisa dibuka — SETTINGS_ENC_KEY berubah/hilang. Isi ulang dari halaman ini."
+          : "URL / API key / instance name Evolution belum diisi.",
         details: { connected: false, status: "not_configured" },
       });
     }
     try {
-      const url = `${env.EVOLUTION_API_URL.replace(/\/$/, "")}/instance/connectionState/${env.EVOLUTION_INSTANCE_NAME}`;
-      const res = await fetch(url, { headers: { apikey: env.EVOLUTION_API_KEY } });
+      const url = `${apiUrl.replace(/\/$/, "")}/instance/connectionState/${instanceName}`;
+      const res = await fetch(url, { headers: { apikey: apiKey } });
       if (!res.ok) {
         return c.json({
           success: false,
@@ -166,15 +304,18 @@ settings.post("/test-connection", async (c) => {
   }
 
   if (service === "xendit") {
-    if (!env.XENDIT_SECRET_KEY) {
+    const secretKey = resolved.xendit.secretKey;
+    if (!secretKey) {
       return c.json({
         success: false,
-        message: "Xendit secret key belum di-set (mock mode aktif).",
+        message: resolved.hasUndecryptable
+          ? "Xendit key tersimpan tapi tidak bisa dibuka — SETTINGS_ENC_KEY berubah/hilang. Isi ulang dari halaman ini."
+          : "Xendit secret key belum diisi (mock mode aktif).",
       });
     }
     try {
       const res = await fetch("https://api.xendit.co/balance", {
-        headers: { authorization: basicAuthHeader(env.XENDIT_SECRET_KEY) },
+        headers: { authorization: basicAuthHeader(secretKey) },
       });
       if (!res.ok) {
         const text = await res.text();

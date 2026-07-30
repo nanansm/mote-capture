@@ -15,6 +15,10 @@ export type Secrets = {
   EVOLUTION_API_URL: string;
   EVOLUTION_API_KEY: string;
   EVOLUTION_INSTANCE_NAME: string;
+  // Wrapping key for credentials the admin edits in the UI (lib/secret-box.ts).
+  // Set once with `wrangler secret put SETTINGS_ENC_KEY`; never rotated as part
+  // of normal credential changes.
+  SETTINGS_ENC_KEY: string;
 };
 
 export type Bindings = {
@@ -47,6 +51,7 @@ const envSchema = z.object({
   EVOLUTION_API_URL: z.string().optional(),
   EVOLUTION_API_KEY: z.string().optional(),
   EVOLUTION_INSTANCE_NAME: z.string().optional(),
+  SETTINGS_ENC_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

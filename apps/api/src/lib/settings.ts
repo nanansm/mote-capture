@@ -33,11 +33,24 @@ export type GeneralSettings = {
   booth_alert_offline_minutes: number;
 };
 
+// Operational credentials the admin can rotate from the UI without a deploy.
+// Every field holds an AES-GCM envelope from lib/secret-box.ts, never a raw
+// key — see that file for why. An empty string means "not set here", which
+// makes the resolver fall back to the matching Worker secret.
+export type CredentialSettings = {
+  xendit_secret_key: string;
+  xendit_webhook_token: string;
+  evolution_api_url: string;
+  evolution_api_key: string;
+  evolution_instance_name: string;
+};
+
 export type SettingMap = {
   whatsapp: WhatsappSettings;
   email: EmailSettings;
   payment: PaymentSettings;
   general: GeneralSettings;
+  credentials: CredentialSettings;
 };
 
 const DEFAULTS: SettingMap = {
@@ -49,6 +62,13 @@ const DEFAULTS: SettingMap = {
   email: { enabled: false, from_name: "Mote Capture", subject: "Foto Kamu Sudah Siap! 📸" },
   payment: { default_provider: "xendit" },
   general: { booth_alert_offline_minutes: 5 },
+  credentials: {
+    xendit_secret_key: "",
+    xendit_webhook_token: "",
+    evolution_api_url: "",
+    evolution_api_key: "",
+    evolution_instance_name: "",
+  },
 };
 
 // ---------------------------------------------------------------------------

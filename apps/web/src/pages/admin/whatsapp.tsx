@@ -1,39 +1,87 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { WhatsappSettings } from "@/components/admin/whatsapp-settings";
+import {
+  CredentialsPanel,
+  type CredentialState,
+  type CredentialsMeta,
+} from "@/components/admin/credentials-panel";
 import { get } from "@/lib/api";
 
 type WaSettings = { enabled: boolean; template: string };
 
-// Ported from apps/cloud/app/admin/whatsapp/page.tsx. `instanceName` used to
-// come from `env.EVOLUTION_INSTANCE_NAME` (a server-only secret) — the new
-// admin-read API surface (apps/api/src/routes/admin-read.ts) never exposes
-// that value, so the panel shows a generic label here instead of leaking
-// infra config to the browser. See final report for this limitation.
+type SettingsResponse = {
+  data: {
+    whatsapp: WaSettings;
+    credentials: CredentialState;
+    credentialsMeta: CredentialsMeta;
+  };
+};
+
+// Ported from apps/cloud/app/admin/whatsapp/page.tsx. The instance name used to
+// be a server-only secret the browser could never see, so this page showed a
+// generic label; it is now an editable credential (non-secret, returned in
+// full), so the panel shows the live value.
 export default function WhatsappPage() {
   const [settings, setSettings] = useState<WaSettings | null>(null);
+  const [credentials, setCredentials] = useState<CredentialState | null>(null);
+  const [meta, setMeta] = useState<CredentialsMeta | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    get<{ data: { whatsapp: WaSettings } }>("/settings")
+  const load = useCallback(() => {
+    return get<SettingsResponse>("/settings")
       .then((res) => {
-        if (!cancelled) setSettings(res.data.whatsapp);
+        setSettings(res.data.whatsapp);
+        setCredentials(res.data.credentials);
+        setMeta(res.data.credentialsMeta);
       })
       .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const instanceName = credentials?.evolution_instance_name?.masked;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-brand-green-dark">WhatsApp Settings</h2>
         <p className="text-sm text-muted-foreground">
-          Atur template pesan otomatis dan cek koneksi ke Evolution API.
+          Atur kredensial Evolution API, template pesan otomatis, dan cek koneksi.
         </p>
       </div>
+
+      {credentials && meta ? (
+        <CredentialsPanel
+          title="Kredensial Evolution API"
+          description="Dipakai untuk mengirim link download lewat WhatsApp. Kalau salah satu kosong, pengiriman WA jatuh ke mock — pesan tidak benar-benar terkirim."
+          meta={meta}
+          initial={credentials}
+          onSaved={load}
+          fields={[
+            {
+              key: "evolution_api_url",
+              label: "API URL",
+              plain: true,
+              hint: "Contoh: https://nama-evolution.easypanel.host — tanpa garis miring di akhir.",
+            },
+            {
+              key: "evolution_api_key",
+              label: "API Key",
+              hint: "Nilai header apikey pada Evolution API.",
+            },
+            {
+              key: "evolution_instance_name",
+              label: "Instance Name",
+              plain: true,
+              hint: "Nama instance yang sudah tersambung ke nomor WhatsApp.",
+            },
+          ]}
+        />
+      ) : null}
+
       {settings ? (
-        <WhatsappSettings initial={settings} instanceName="Evolution API (dikonfigurasi di server)" />
+        <WhatsappSettings initial={settings} instanceName={instanceName || "(belum diisi)"} />
       ) : null}
     </div>
   );
