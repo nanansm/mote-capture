@@ -1,6 +1,11 @@
 // Types shared between Electron main + renderer (config UI).
 
-export type CameraMode = "webcam-mac" | "digicamcontrol" | "gphoto2" | "mock";
+export type CameraMode =
+  | "webcam-mac"
+  | "webcam-win"
+  | "digicamcontrol"
+  | "gphoto2"
+  | "mock";
 export type PrinterMode = "win32" | "cups" | "mock";
 
 export type BridgeConfig = {
@@ -17,6 +22,9 @@ export type BridgeConfig = {
   // digiCamControl Session folder where freshly-captured JPGs land. Default:
   // %USERPROFILE%\Pictures\digiCamControl\Session1
   digiCamSessionFolder?: string;
+  // Override for the ffmpeg binary used by cameraMode "webcam-win". Empty =
+  // use the copy bundled with the installer, then anything on PATH.
+  ffmpegPath?: string;
   autoStart: boolean;
 };
 

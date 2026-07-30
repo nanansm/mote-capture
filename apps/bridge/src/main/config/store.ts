@@ -21,6 +21,8 @@ const DEFAULTS: BridgeConfig = {
     process.platform === "win32"
       ? path.join(os.homedir(), "Pictures", "digiCamControl", "Session1")
       : "",
+  // Empty = let webcam-win resolve the bundled ffmpeg, then PATH.
+  ffmpegPath: "",
   autoStart: false,
 };
 

@@ -34,9 +34,15 @@ async function bootstrap(): Promise<void> {
   installCrashWatchdog();
 
   // Start the local HTTP proxy early so the kiosk can hit /live-preview
-  // even if cloud auth fails or the bridge token isn't set yet.
+  // even if cloud auth fails or the bridge token isn't set yet. The preview
+  // source is read lazily on every request because `handlers` does not exist
+  // yet at this point, and the camera instance is swapped out whenever the
+  // user saves a new mode in the config UI.
   try {
-    localServer = await startLocalServer();
+    localServer = await startLocalServer(undefined, () => {
+      const camera = handlers?.cameraInstance();
+      return camera?.getPreviewFrame?.() ?? null;
+    });
   } catch (err) {
     logger.warn("local_server_start_failed", { err: errMsg(err) });
   }

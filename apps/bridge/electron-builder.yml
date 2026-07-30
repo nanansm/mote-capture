@@ -45,9 +45,14 @@ win:
   # installer-deps/digiCamControl-setup.exe before building on Windows
   # (see installer-deps/README.md). win-scoped so the mac smoke build does not
   # need it.
+  # ffmpeg.exe backs cameraMode "webcam-win" (Sony ZV-E10 over UVC — the body
+  # has no PC Remote mode, so dshow is the only automatable path). Resolved at
+  # runtime from process.resourcesPath by camera/webcam-win.ts.
   extraResources:
     - from: installer-deps/digiCamControl-setup.exe
       to: digiCamControl-setup.exe
+    - from: installer-deps/ffmpeg.exe
+      to: ffmpeg.exe
 
 linux:
   icon: assets/icon.png

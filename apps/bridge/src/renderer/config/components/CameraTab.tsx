@@ -3,6 +3,7 @@ import type { BridgeConfig, CameraMode, DeviceTestResult } from "../../../shared
 
 const MODES: { value: CameraMode; label: string }[] = [
   { value: "webcam-mac", label: "Webcam (macOS — imagesnap)" },
+  { value: "webcam-win", label: "Webcam / Sony UVC (Windows — ffmpeg)" },
   { value: "digicamcontrol", label: "Canon via digiCamControl (Windows)" },
   { value: "gphoto2", label: "Canon via gphoto2 (Mac/Linux)" },
   { value: "mock", label: "Mock (SVG placeholder)" },
@@ -19,6 +20,7 @@ export function CameraTab({
   const [deviceName, setDeviceName] = useState(config.cameraDeviceName ?? "");
   const [digicamPath, setDigicamPath] = useState(config.digiCamControlPath ?? "");
   const [sessionFolder, setSessionFolder] = useState(config.digiCamSessionFolder ?? "");
+  const [ffmpegPath, setFfmpegPath] = useState(config.ffmpegPath ?? "");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<DeviceTestResult | null>(null);
 
@@ -31,6 +33,7 @@ export function CameraTab({
         cameraDeviceName: deviceName.trim(),
         digiCamControlPath: digicamPath.trim(),
         digiCamSessionFolder: sessionFolder.trim(),
+        ffmpegPath: ffmpegPath.trim(),
       });
     } finally {
       setBusy(false);
@@ -76,6 +79,54 @@ export function CameraTab({
               <code>brew install imagesnap</code>.
             </div>
           </div>
+        ) : null}
+
+        {mode === "webcam-win" ? (
+          <>
+            <div className="col">
+              <label htmlFor="wname">Device name (optional)</label>
+              <input
+                id="wname"
+                value={deviceName}
+                onChange={(e) => setDeviceName(e.target.value)}
+                placeholder="ZV-E10"
+              />
+              <div className="muted">
+                Nama device dshow. Kosongkan untuk pakai kamera video pertama yang
+                terdeteksi. Daftar lengkap:{" "}
+                <code>ffmpeg -list_devices true -f dshow -i dummy</code>.
+              </div>
+            </div>
+
+            <div className="col">
+              <label htmlFor="fpath">ffmpeg.exe path (optional)</label>
+              <input
+                id="fpath"
+                value={ffmpegPath}
+                onChange={(e) => setFfmpegPath(e.target.value)}
+                placeholder="(bundled)"
+              />
+              <div className="muted">
+                Kosongkan untuk pakai ffmpeg yang dibundel installer. Diisi hanya kalau
+                mau menunjuk ffmpeg lain.
+              </div>
+            </div>
+
+            <div className="muted" style={{ borderLeft: "3px solid var(--border)", paddingLeft: 10 }}>
+              <strong>Sony ZV-E10 — setting kamera wajib:</strong>
+              <ol style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                <li>
+                  MENU → Setup → <strong>USB Streaming = On</strong>
+                </li>
+                <li>
+                  USB Connection <strong>bukan</strong> MTP / Mass Storage — mode itu bikin
+                  kamera hilang dari daftar dshow
+                </li>
+                <li>Colok ulang kabel USB setelah ganti mode, tunggu ±10 detik</li>
+              </ol>
+              Stream 720p sudah cukup: slot foto di cetakan cuma 790×320 px.
+            </div>
+          </>
         ) : null}
 
         {mode === "digicamcontrol" ? (

@@ -4,7 +4,15 @@
 //
 // Endpoints:
 //   GET /healthz       -> "ok" (sanity probe)
-//   GET /live-preview  -> proxies digiCamControl webserver /liveview.jpg
+//   GET /live-preview  -> newest frame from the active camera driver, falling
+//                         back to the digiCamControl webserver /liveview.jpg
+//
+// Two preview sources exist because the two camera drivers own the device
+// differently. digiCamControl runs as a separate GUI process and publishes
+// frames over its own webserver, so we proxy it. webcam-win holds the dshow
+// device inside this process and already keeps the newest MJPEG frame in
+// memory, so serving from memory avoids a pointless localhost round-trip —
+// and there is no external webserver to proxy in the first place.
 //
 // The proxy adds permissive CORS headers so the cloud-served kiosk page
 // (capture.motekreatif.com) can <img src="http://localhost:LOCAL_PORT/...">
@@ -45,8 +53,14 @@ export type LocalServer = {
   close: () => Promise<void>;
 };
 
+// Returns the newest in-process preview frame, or null when the active driver
+// has no in-process source (then the digiCamControl proxy takes over). Called
+// on every poll, so it must stay allocation-free — no decoding, no I/O.
+export type PreviewFrameSource = () => Buffer | null;
+
 export async function startLocalServer(
   port = DEFAULT_LOCAL_PORT,
+  previewFrame?: PreviewFrameSource,
 ): Promise<LocalServer> {
   const server = http.createServer((req, res) => {
     const cors = corsHeadersFor(req.headers.origin);
@@ -66,6 +80,19 @@ export async function startLocalServer(
     }
 
     if (url.startsWith("/live-preview")) {
+      // In-process frame wins when the active driver owns the device.
+      const frame = previewFrame?.() ?? null;
+      if (frame) {
+        res.writeHead(200, {
+          ...cors,
+          "content-type": "image/jpeg",
+          "content-length": String(frame.length),
+          // Every poll must hit a fresh frame, never the browser's cache.
+          "cache-control": "no-store",
+        });
+        res.end(frame);
+        return;
+      }
       void proxyLivePreview(res, cors).catch((err) => {
         logger.warn("live_preview_proxy_error", {
           err: err instanceof Error ? err.message : String(err),

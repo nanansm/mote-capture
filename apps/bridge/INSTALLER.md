@@ -36,9 +36,11 @@ shortcut (atau reboot) untuk melihat layar kiosk yang benar.
 
 Prerequisites: Node 18+, pnpm, repo cloned.
 
-1. Drop the digiCamControl installer at
-   `apps/bridge/installer-deps/digiCamControl-setup.exe`
-   (see `installer-deps/README.md`). **Build fails without it.**
+1. Drop **both** bundled binaries into `apps/bridge/installer-deps/`
+   (see `installer-deps/README.md`). **Build fails without either one** —
+   `preflight-win.cjs` checks them before electron-builder runs:
+   - `digiCamControl-setup.exe` — Canon tethering
+   - `ffmpeg.exe` — Sony ZV-E10 via UVC (`cameraMode: webcam-win`)
 2. From repo root:
    ```cmd
    pnpm install
@@ -58,10 +60,21 @@ installer.
 2. Bridge tray app opens its config window automatically (no token yet):
    paste the **bridge token**, set Cloud URL, tick **Launch on system startup**,
    Save. Booth ID auto-fills from the token.
-3. **One-time digiCamControl config** (cannot be pre-seeded safely):
+3. **One-time camera config** — depends on the body at that booth:
+
+   **Canon (`digicamcontrol`)** — cannot be pre-seeded safely:
    - Settings → Webserver → Enable (port 5513)
    - Open/confirm a capture session named **Session1**
-4. Reboot to verify: kiosk + bridge + digiCamControl all auto-start.
+
+   **Sony ZV-E10 (`webcam-win`)** — no digiCamControl involved:
+   - On the camera: **MENU → Setup → USB Streaming = On**, then replug USB.
+     Do not leave it in MTP/Mass Storage; those modes remove it from the dshow
+     device list. The body has **no PC Remote option**, which is why tethering
+     is off the table and UVC is the supported path.
+   - Bridge config → Camera tab → mode **Webcam / Sony UVC (Windows — ffmpeg)**,
+     Device name empty (auto-picks the first video device), then Test Capture.
+4. Reboot to verify: kiosk + bridge (+ digiCamControl on Canon booths) all
+   auto-start.
 
 ## Code-signing note
 
