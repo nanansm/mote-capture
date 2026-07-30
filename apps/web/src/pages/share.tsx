@@ -276,7 +276,7 @@ export default function SharePage() {
               rel="noreferrer"
               className="hover:underline"
             >
-              Maja Photobooth × Mote Kreatif
+              Capture by Mote Kreatif
             </a>
           </p>
         </CardContent>

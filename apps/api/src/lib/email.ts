@@ -82,7 +82,7 @@ export function downloadLinkHtml(v: DownloadLinkVars): string {
             </tr>
             <tr>
               <td style="background:#1A3A2A;color:#F5E642;padding:24px;text-align:center;font-size:13px;">
-                <p style="margin:0;">— Maja Photobooth × Mote Kreatif</p>
+                <p style="margin:0;">— Capture by Mote Kreatif</p>
               </td>
             </tr>
           </table>
@@ -105,7 +105,7 @@ export function downloadLinkText(v: DownloadLinkVars): string {
     "",
     `Link berlaku sampai ${v.expiryDate}.`,
     "",
-    "— Maja Photobooth × Mote Kreatif",
+    "— Capture by Mote Kreatif",
   ].join("\n");
 }
 
