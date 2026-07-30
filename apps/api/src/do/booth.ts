@@ -69,6 +69,9 @@ const confirmAndPaySchema = z.object({
 
 const startCaptureSchema = z.object({
   sessionId: z.string().min(1),
+  // Which photo the kiosk wants shot now. Absent = 1, so an older kiosk build
+  // that only ever asked for the first photo still starts a session.
+  photoIndex: z.number().int().min(1).max(3).optional(),
 });
 
 const submitContactSchema = z.object({
@@ -511,14 +514,53 @@ export class BoothDO extends DurableObject<Bindings> {
   }
 
   // Ported from apps/cloud/lib/socket/handlers/kiosk.ts START_CAPTURE handler.
+  //
+  // The kiosk asks for EACH photo, not just the first. Pacing belongs to the
+  // kiosk because that is where the human-facing countdown lives: the shutter
+  // has to fire on the same beat as the "CHEESE!" the guest is reading. The DO
+  // used to auto-cascade the next photo the instant the previous upload landed
+  // (see onPhotoUploaded), which on the Sony/UVC driver — where capture() just
+  // grabs the newest in-memory frame — fired all three shots milliseconds
+  // apart while the kiosk was still animating a 3-2-1 that had already been
+  // overtaken. The DO stays the authority on WHICH photo is next; it just no
+  // longer decides WHEN.
   private async handleStartCapture(ownBoothId: string, raw: unknown): Promise<HandlerResult> {
     const parsed = startCaptureSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, error: "invalid payload" };
     const { sessionId } = parsed.data;
+    const photoIndex = parsed.data.photoIndex ?? 1;
 
     const db = getDb(this.env.DB);
     const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
     if (!session || session.boothId !== ownBoothId) return { ok: false, error: "session not found" };
+
+    const [booth] = await db.select().from(schema.booths).where(eq(schema.booths.id, ownBoothId)).limit(1);
+    const useMock =
+      ((booth?.metadata as Record<string, unknown> | null)?.use_mock_bridge as boolean | undefined) ?? true;
+
+    // Photos 2 and 3: the session is already running, so validate against the
+    // uploads we have rather than payment status.
+    if (photoIndex > 1) {
+      if (session.status !== "capturing") {
+        return { ok: false, error: `session not capturing (current: ${session.status})` };
+      }
+      // Mock bridge paces itself through alarms — the kiosk's per-photo asks
+      // are redundant there, so acknowledge and drop them.
+      if (useMock) return { ok: true, data: { mockMode: true, ignored: true } };
+
+      const received = new Set<number>((await this.ctx.storage.get<number[]>(photosKey(sessionId))) ?? []);
+      // Already have it: a retry or a re-render asking twice. Acknowledge so
+      // the kiosk doesn't surface an error and tear down a live session.
+      if (received.has(photoIndex)) return { ok: true, data: { mockMode: false, ignored: true } };
+      const expected = received.size + 1;
+      if (photoIndex !== expected) {
+        return { ok: false, error: `out of order photo (expected ${expected}, got ${photoIndex})` };
+      }
+
+      this.pushToBridge(SocketEvents.BRIDGE_CAPTURE, { sessionId, photoIndex });
+      return { ok: true, data: { mockMode: false } };
+    }
+
     if (session.status !== "paid") {
       return { ok: false, error: `session not paid (current: ${session.status})` };
     }
@@ -526,16 +568,12 @@ export class BoothDO extends DurableObject<Bindings> {
     await db.update(schema.sessions).set({ status: "capturing" }).where(eq(schema.sessions.id, sessionId));
     await this.ctx.storage.put(photosKey(sessionId), [] as number[]);
 
-    const [booth] = await db.select().from(schema.booths).where(eq(schema.booths.id, ownBoothId)).limit(1);
-    const useMock =
-      ((booth?.metadata as Record<string, unknown> | null)?.use_mock_bridge as boolean | undefined) ?? true;
-
     if (useMock) {
       await this.ctx.storage.put<AlarmTask>("alarm:task", { type: "mock_capture", sessionId, index: 1 });
       await this.ctx.storage.setAlarm(Date.now() + MOCK_BRIDGE.CAPTURE_DELAY_MS);
     } else {
-      // Real bridge — start the capture sequence at photoIndex 1. Everything
-      // after this is event-driven (HTTP uploads + WS messages), no alarms.
+      // Real bridge — photo 1. Photos 2 and 3 arrive as their own requests
+      // when the kiosk reaches each CHEESE.
       this.pushToBridge(SocketEvents.BRIDGE_CAPTURE, { sessionId, photoIndex: 1 });
     }
 
@@ -805,10 +843,13 @@ export class BoothDO extends DurableObject<Bindings> {
     received.add(index);
     await this.ctx.storage.put(key, Array.from(received));
 
-    if (received.size < TOTAL_PHOTOS) {
-      this.pushToBridge(SocketEvents.BRIDGE_CAPTURE, { sessionId, photoIndex: received.size + 1 });
-      return;
-    }
+    // Not done yet: stop here and let the kiosk ask for the next photo when it
+    // reaches that photo's CHEESE (see handleStartCapture). Firing the next
+    // BRIDGE_CAPTURE from here is what made all three shots land in the same
+    // instant on the UVC driver, with the countdown animating over a shutter
+    // that had already gone off. A kiosk that dies mid-session now stalls
+    // instead of blind-capturing and printing a strip nobody is standing for.
+    if (received.size < TOTAL_PHOTOS) return;
 
     await db.update(schema.sessions).set({ status: "processing" }).where(eq(schema.sessions.id, sessionId));
     const composite = await this.buildCompositePayload(sessionId);

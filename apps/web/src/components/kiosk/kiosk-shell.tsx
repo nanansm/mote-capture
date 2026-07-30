@@ -74,9 +74,11 @@ export function KioskShell(props: Props) {
   const [busy, setBusy] = useState(false);
   const [doneCountdown, setDoneCountdown] = useState(8);
   const [flashing, setFlashing] = useState(false);
-  // Latch that prevents START_CAPTURE from being emitted twice in one session.
+  // Which photo steps have already had their shutter requested. Per-step, not a
+  // single boolean, because the kiosk now asks for every photo at its own
+  // CHEESE — the latch only exists to survive re-renders of the same step.
   // Cleared on RESET via the IDLE effect below.
-  const captureStartedRef = useRef(false);
+  const capturedStepsRef = useRef<Set<number>>(new Set());
 
   // WebSocket connection — one client per mounted boothId, torn down on
   // unmount. `wsConnected` mirrors the client's open/closed state so the UI
@@ -179,10 +181,10 @@ export function KioskShell(props: Props) {
 
   // ── State-specific timers ──────────────────────────────────────────────
 
-  // Reset the per-session capture-started latch when we return to IDLE,
-  // so the next session emits START_CAPTURE again at its own CHEESE moment.
+  // Reset the per-session shutter latches when we return to IDLE, so the next
+  // session requests each photo again at its own CHEESE moment.
   useEffect(() => {
-    if (state === "IDLE") captureStartedRef.current = false;
+    if (state === "IDLE") capturedStepsRef.current.clear();
   }, [state]);
 
   // PAYMENT timeout — auto cancel when QR expires
@@ -197,10 +199,11 @@ export function KioskShell(props: Props) {
     return () => window.clearTimeout(id);
   }, [state, context.paymentExpiresAt]);
 
-  // COUNTDOWN orchestration: GET_READY (photo 1 only) → 3 → 2 → 1 → CHEESE.
-  // After the CHEESE flash, we hold and wait for the bridge's PHOTO_TAKEN
-  // socket event to advance the step (the actual shutter timing is owned by
-  // the camera driver, not the UI).
+  // COUNTDOWN orchestration: GET_READY (photo 1 only) → 3 → 2 → 1 → CHEESE →
+  // hold → shutter. The kiosk owns the shutter timing for EVERY photo, not
+  // just the first: the guest is reading "CHEESE!", so that is the moment the
+  // frame has to be grabbed. After the shutter we wait for the bridge's
+  // PHOTO_TAKEN event, which advances the step and restarts the cadence.
   useEffect(() => {
     if (state !== "COUNTDOWN") return;
     const phase = context.countdownPhase;
@@ -215,9 +218,16 @@ export function KioskShell(props: Props) {
 
     if (phase === "COUNTDOWN") {
       if (context.countdownNumber > 1) {
+        // Photos 2 and 3 open on "3" straight after the previous flash, so
+        // hold that first digit a beat longer — otherwise the three shots read
+        // as one continuous burst instead of three separate poses.
+        const isFirstDigitOfLaterPhoto = context.countdownNumber === 3 && context.countdownStep > 1;
+        const delay = isFirstDigitOfLaterPhoto
+          ? KIOSK_TIMING.COUNTDOWN_TICK_MS + KIOSK_TIMING.POST_CAPTURE_HOLD_MS
+          : KIOSK_TIMING.COUNTDOWN_TICK_MS;
         const id = window.setTimeout(() => {
           dispatch({ type: "COUNTDOWN_TICK", value: context.countdownNumber - 1 });
-        }, KIOSK_TIMING.COUNTDOWN_TICK_MS);
+        }, delay);
         return () => window.clearTimeout(id);
       }
       // We just rendered "1" — after one tick, swap to CHEESE.
@@ -227,22 +237,31 @@ export function KioskShell(props: Props) {
       return () => window.clearTimeout(id);
     }
 
-    // CHEESE: tell the cloud to fire the bridge shutter for photo 1 — gated
-    // by captureStartedRef so we only emit once per session even if the
-    // CHEESE phase re-renders. Photos 2 & 3 are auto-cascaded by the cloud
-    // when each PHOTO_UPLOADED arrives, so no per-photo emit is needed here.
-    if (
-      phase === "CHEESE" &&
-      context.countdownStep === 1 &&
-      context.sessionId &&
-      !captureStartedRef.current
-    ) {
-      captureStartedRef.current = true;
-      void wsRequest(SocketEvents.START_CAPTURE, { sessionId: context.sessionId }).catch((err) => {
-        toast.error(err instanceof Error ? err.message : "Gagal memulai foto");
-        captureStartedRef.current = false;
-        dispatch({ type: "RESET" });
-      });
+    // CHEESE: let the word sit on screen for CHEESE_HOLD_MS, then flash and ask
+    // the cloud to fire the shutter for THIS step. The per-step latch keeps a
+    // re-render from double-firing; the cloud also treats a repeat ask for an
+    // already-captured index as a no-op, so a stray retry can't skip a photo.
+    const step = context.countdownStep;
+    if (phase === "CHEESE" && context.sessionId && !capturedStepsRef.current.has(step)) {
+      capturedStepsRef.current.add(step);
+      const sessionId = context.sessionId;
+      let flashOffId = 0;
+      const shutterId = window.setTimeout(() => {
+        // The white flash was dead code until now — setFlashing was never
+        // called anywhere, so the shutter had no visual feedback at all.
+        setFlashing(true);
+        flashOffId = window.setTimeout(() => setFlashing(false), KIOSK_TIMING.COUNTDOWN_FLASH_MS);
+        void wsRequest(SocketEvents.START_CAPTURE, { sessionId, photoIndex: step }).catch((err) => {
+          toast.error(err instanceof Error ? err.message : "Gagal memulai foto");
+          capturedStepsRef.current.delete(step);
+          dispatch({ type: "RESET" });
+        });
+      }, KIOSK_TIMING.CHEESE_HOLD_MS);
+      return () => {
+        window.clearTimeout(shutterId);
+        if (flashOffId) window.clearTimeout(flashOffId);
+        setFlashing(false);
+      };
     }
   }, [state, context.countdownPhase, context.countdownNumber, context.countdownStep, context.sessionId, wsRequest]);
 
@@ -397,8 +416,8 @@ export function KioskShell(props: Props) {
     // Don't emit START_CAPTURE here — the bridge captures the moment cloud
     // forwards it, which would fire the shutter ~10s before the guest sees
     // "CHEESE!" because of the GET_READY pre-phase. Instead, the COUNTDOWN
-    // orchestrator emits it when the CHEESE phase of photo 1 begins.
-    captureStartedRef.current = false;
+    // orchestrator emits it at each photo's CHEESE hold.
+    capturedStepsRef.current.clear();
     dispatch({ type: "ENTER_COUNTDOWN" });
   }, [context.sessionId]);
 
