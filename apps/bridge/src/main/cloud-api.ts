@@ -1,18 +1,28 @@
 // Thin axios wrapper for talking to the cloud HTTP API (heartbeat, photo
 // upload, composite upload, frame PNG download). All requests use the bridge
 // token as Bearer auth. Errors throw — callers wrap.
+//
+// Upload transport change: the cloud API used to accept a multipart-encoded
+// POST; it now accepts a raw-body PUT with the file bytes as-is (metadata
+// via query string) — see apps/api/src/routes/bridge.ts. The multipart
+// encoder dependency this used to pull in is gone.
 import axios, { AxiosInstance } from "axios";
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import FormData from "form-data";
 import { logger } from "./logger";
+
+// The cloud upload routes only ever accept PNG bodies (see
+// packages/shared/src/constants ALLOWED_IMAGE_MIME) — the bridge always
+// sends this Content-Type regardless of the source capture format, matching
+// the fixed contract in apps/api/src/routes/bridge.ts.
+const UPLOAD_CONTENT_TYPE = "image/png";
 
 export type CloudClient = {
   http: AxiosInstance;
   baseUrl: string;
   token: string;
-  uploadPhoto: (sessionId: string, filePath: string, sortOrder: number) => Promise<{ url: string }>;
-  uploadComposite: (sessionId: string, filePath: string) => Promise<{ url: string }>;
+  uploadPhoto: (sessionId: string, filePath: string, sortOrder: number) => Promise<{ key: string }>;
+  uploadComposite: (sessionId: string, filePath: string) => Promise<{ key: string }>;
   heartbeat: (payload: Record<string, unknown>) => Promise<{ ok: boolean }>;
   downloadFile: (url: string, destPath: string) => Promise<void>;
   resolveBoothByToken: () => Promise<{ boothId: string; name: string } | null>;
@@ -26,6 +36,19 @@ export function makeCloudClient(opts: { baseUrl: string; token: string }): Cloud
     headers: { Authorization: `Bearer ${opts.token}` },
   });
 
+  async function putFile(urlPath: string, filePath: string): Promise<{ key: string }> {
+    const body = await fs.readFile(filePath);
+    const res = await http.put(urlPath, body, {
+      headers: {
+        "Content-Type": UPLOAD_CONTENT_TYPE,
+        "Content-Length": body.byteLength,
+      },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
+    return { key: res.data.data.key as string };
+  }
+
   return {
     http,
     baseUrl,
@@ -37,34 +60,19 @@ export function makeCloudClient(opts: { baseUrl: string; token: string }): Cloud
     },
 
     async uploadPhoto(sessionId, filePath, sortOrder) {
-      const form = new FormData();
-      form.append("file", fs.createReadStream(filePath));
-      form.append("sortOrder", String(sortOrder));
-      const res = await http.post(`/api/session/${sessionId}/photos`, form, {
-        headers: form.getHeaders(),
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-      });
-      return { url: res.data.data.url as string };
+      return putFile(`/api/session/${sessionId}/photos?sortOrder=${sortOrder}`, filePath);
     },
 
     async uploadComposite(sessionId, filePath) {
-      const form = new FormData();
-      form.append("file", fs.createReadStream(filePath));
-      const res = await http.post(`/api/session/${sessionId}/composite`, form, {
-        headers: form.getHeaders(),
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-      });
-      return { url: res.data.data.url as string };
+      return putFile(`/api/session/${sessionId}/composite`, filePath);
     },
 
     async downloadFile(url, destPath) {
       // url may be absolute (R2 public CDN) or relative ("/uploads/...")
       const fullUrl = url.startsWith("http") ? url : `${baseUrl}${url}`;
       const res = await axios.get(fullUrl, { responseType: "arraybuffer", timeout: 30_000 });
-      fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.writeFileSync(destPath, Buffer.from(res.data));
+      await fs.mkdir(path.dirname(destPath), { recursive: true });
+      await fs.writeFile(destPath, Buffer.from(res.data));
     },
 
     async resolveBoothByToken() {

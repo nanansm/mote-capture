@@ -107,15 +107,14 @@ export class BridgeHandlers {
         await fsp.unlink(compressed.uploadPath).catch(() => undefined);
       }
 
-      this.deps.client.emitSocket(SocketEvents.PHOTO_UPLOADED, {
-        sessionId,
-        index: photoIndex,
-        url: upload.url,
-      });
+      // No upload-ack push back to the server anymore — the HTTP upload
+      // route itself notifies BoothDO (see apps/api/src/routes/bridge.ts),
+      // which replies with the next BRIDGE_CAPTURE or BRIDGE_COMPOSITE push.
+      // Nothing to send here.
       logger.info("handler_capture_uploaded", {
         sessionId,
         photoIndex,
-        url: upload.url,
+        key: upload.key,
         uploadBytes: compressed.bytes,
         compressed: compressed.compressed,
       });
@@ -178,10 +177,10 @@ export class BridgeHandlers {
         layout: (payload.layoutJson as never) ?? null,
       });
       const upload = await this.deps.cloud.uploadComposite(payload.sessionId, result.outputPath);
-      this.deps.client.emitSocket(SocketEvents.COMPOSITE_UPLOADED, {
-        sessionId: payload.sessionId,
-        url: upload.url,
-      });
+      // No upload-ack push here either — same reasoning as the capture path
+      // above: the upload route notifies BoothDO directly, which replies
+      // with BRIDGE_PRINT.
+      logger.info("handler_composite_uploaded", { sessionId: payload.sessionId, key: upload.key });
       // Stash composite path for the upcoming print event.
       ctx.photos.set(99, result.outputPath);
     } catch (err) {
