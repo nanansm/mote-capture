@@ -39,7 +39,7 @@ export function SetupTab({
             id="cloud"
             value={cloudUrl}
             onChange={(e) => setCloudUrl(e.target.value)}
-            placeholder="https://mote-capture.smnanan.workers.dev"
+            placeholder="https://capture.motekreatif.com"
           />
           <div className="muted">URL Next.js cloud yang dipakai bridge ini.</div>
         </div>

@@ -19,11 +19,16 @@
   // takes the whole site down on the old URL.
   "workers_dev": true,
 
-  // Custom Domain for capture.motekreatif.com is NOT enabled yet: the zone
-  // still has an A record for that hostname pointing at the retired VPS, and
-  // Cloudflare rejects the domain attachment with 409 Conflict until it is
-  // removed. Re-add once the A record is gone:
-  //   "routes": [{ "pattern": "capture.motekreatif.com", "custom_domain": true }]
+  // Custom Domain: Cloudflare owns the DNS record and edge certificate for
+  // this hostname. It had to be attached from the dashboard first — the API
+  // refuses (409 Conflict) while any externally managed record still exists
+  // for the hostname, and offers no override.
+  "routes": [
+    {
+      "pattern": "capture.motekreatif.com",
+      "custom_domain": true
+    }
+  ],
 
   "assets": {
     "directory": "../web/dist",
@@ -73,9 +78,9 @@
   "vars": {
     "PUBLIC_CDN_URL": "https://cdn.motekreatif.com",
     // Used to build customer-facing share links (/share/:token) — must be the
-    // URL customers actually reach. Change this when the custom domain
-    // (capture.motekreatif.com) is cut over.
-    "APP_URL": "https://mote-capture.smnanan.workers.dev",
+    // URL customers actually reach, which is the custom domain, not the
+    // workers.dev fallback.
+    "APP_URL": "https://capture.motekreatif.com",
     "DOWNLOAD_LINK_EXPIRY_DAYS": "7",
     // Resend rejects any sender whose domain is not verified on the account.
     // send.essentiallyour.com is the only verified domain there (Tokyo region);

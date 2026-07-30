@@ -6,7 +6,7 @@ import os from "node:os";
 import type { BridgeConfig } from "../../shared/types";
 
 const DEFAULTS: BridgeConfig = {
-  cloudUrl: "https://mote-capture.smnanan.workers.dev",
+  cloudUrl: "https://capture.motekreatif.com",
   bridgeToken: "",
   boothId: "",
   cameraMode: process.platform === "darwin" ? "webcam-mac" : "mock",
