@@ -11,6 +11,9 @@ build/
 out/
 *.tsbuildinfo
 
+# graphify knowledge graph (regenerated from source by the post-commit hook)
+graphify-out/
+
 # Env
 .env
 .env.local
