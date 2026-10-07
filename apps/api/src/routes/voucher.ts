@@ -6,7 +6,7 @@ import { getDb, schema } from "@/db";
 import { logger } from "@/lib/logger";
 import type { AdminVariables } from "@/middleware/admin";
 import { requireAdmin } from "@/middleware/admin";
-import { markPaid } from "@/do/rpc";
+import { checkRedeemAttempt, markPaid } from "@/do/rpc";
 
 // Ported from apps/cloud/app/api/admin/voucher/{generate,list,export,[id]}/route.ts
 // and apps/cloud/app/api/voucher/redeem/route.ts.
@@ -309,6 +309,40 @@ publicVoucherRoutes.post("/redeem", async (c) => {
 
   const db = getDb(c.env.DB);
 
+  // sessions is READ-ONLY here — BoothDO is the sole writer. Dibaca lebih dulu
+  // supaya boothId diambil dari D1, bukan dari body (boothId di body hanya
+  // petunjuk dan tidak dipercaya: klien bisa mengarahkan rate limit dan
+  // markPaid ke DO booth lain).
+  const [session] = await db
+    .select()
+    .from(schema.sessions)
+    .where(eq(schema.sessions.id, sessionId))
+    .limit(1);
+
+  if (!session) {
+    return c.json({ error: "SESSION_NOT_FOUND", message: "Sesi tidak ditemukan" }, 404);
+  }
+  const boothId = session.boothId;
+  if (boothIdHint && boothIdHint !== boothId) {
+    logger.warn("voucher_redeem_booth_mismatch", { sessionId, boothIdHint, boothId });
+  }
+
+  // PRD bagian 8 #9: hitung percobaan sebelum kode dicek, termasuk kode salah.
+  const attempt = await checkRedeemAttempt(c.env, boothId, sessionId);
+  if (!attempt.ok) {
+    const retryAfterSec = Math.max(1, Math.ceil(attempt.retryAfterMs / 1000));
+    c.header("Retry-After", String(retryAfterSec));
+    return c.json(
+      {
+        error: "RATE_LIMITED",
+        message: "Terlalu banyak percobaan voucher. Coba lagi nanti atau panggil staf.",
+        scope: attempt.scope,
+        retryAfterSec,
+      },
+      429,
+    );
+  }
+
   const [voucher] = await db
     .select()
     .from(schema.vouchers)
@@ -350,18 +384,9 @@ publicVoucherRoutes.post("/redeem", async (c) => {
     return c.json({ error: "QUOTA_EXHAUSTED", message: "Voucher sudah habis dipakai" }, 400);
   }
 
-  // sessions is READ-ONLY here — BoothDO is the sole writer.
-  const [session] = await db
-    .select()
-    .from(schema.sessions)
-    .where(eq(schema.sessions.id, sessionId))
-    .limit(1);
-
-  if (!session) {
-    return c.json({ error: "SESSION_NOT_FOUND", message: "Sesi tidak ditemukan" }, 404);
-  }
-
-  if (session.status !== "payment" && session.status !== "idle") {
+  // Hanya `payment` yang bisa dibayar: markPaid hanya memindah payment -> paid,
+  // jadi `idle` dulu memotong kuota voucher tanpa sesi berjalan.
+  if (session.status !== "payment") {
     return c.json(
       {
         error: "SESSION_NOT_PAYABLE",
@@ -394,6 +419,21 @@ publicVoucherRoutes.post("/redeem", async (c) => {
     );
   }
 
+  // PRD bagian 8 #8: booth hanya menerima voucher yang menutup harga penuh.
+  // Tidak ada QR sisa bayar, jadi voucher parsial ditolak SEBELUM kuota
+  // dipotong dan sebelum markPaid (dulu markPaid tetap jalan = foto gratis).
+  if (finalAmount > 0) {
+    return c.json(
+      {
+        error: "VOUCHER_NOT_FULL_COVER",
+        message: "Voucher tidak berlaku di booth",
+        originalAmount: session.amount,
+        finalAmount,
+      },
+      400,
+    );
+  }
+
   // --- Atomic redemption guard -----------------------------------------
   // No db.transaction() on D1: this single conditional UPDATE IS the
   // atomicity boundary. Two parallel requests for a limit=1 voucher both
@@ -401,7 +441,6 @@ publicVoucherRoutes.post("/redeem", async (c) => {
   // them can match this WHERE clause and actually flip the row — SQLite
   // (and D1) serialise writes to a single row. The loser sees
   // meta.changes === 0 and bails out before writing anything else.
-  const boothId = boothIdHint || session.boothId;
   const nowDate = new Date();
 
   const updateResult = await db
@@ -461,13 +500,40 @@ publicVoucherRoutes.post("/redeem", async (c) => {
 
   // BoothDO is the sole writer of `sessions` — ask it to transition the
   // session to paid instead of updating the row here.
-  await markPaid(c.env, boothId, sessionId, {
+  const transitioned = await markPaid(c.env, boothId, sessionId, {
     method: "voucher",
     voucherId: voucher.id,
     code,
     finalAmount,
     discountApplied,
   });
+
+  if (!transitioned) {
+    // Sesi berubah di antara pengecekan dan markPaid (kedaluwarsa, dibatalkan,
+    // atau voucher kedua menang). Kembalikan kuota supaya voucher tidak hangus;
+    // catat pembalikan di ledger, baris redemption tetap ada untuk audit.
+    await db.batch([
+      db
+        .update(schema.vouchers)
+        .set({
+          usedCount: sql`MAX(${schema.vouchers.usedCount} - 1, 0)`,
+          status: sql`CASE WHEN ${schema.vouchers.status} = 'used' THEN 'active' ELSE ${schema.vouchers.status} END`,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.vouchers.id, voucher.id)),
+      db.insert(schema.paymentLogs).values({
+        sessionId,
+        provider: "voucher",
+        eventType: "voucher_redeem_reverted",
+        payload: { voucherId: voucher.id, redemptionId, reason: "session_not_payable" },
+      }),
+    ]);
+    logger.warn("voucher_redeem_reverted", { sessionId, boothId, voucherId: voucher.id });
+    return c.json(
+      { error: "SESSION_NOT_PAYABLE", message: "Sesi sudah tidak bisa dibayar" },
+      409,
+    );
+  }
 
   logger.info("voucher_redeemed", {
     sessionId,

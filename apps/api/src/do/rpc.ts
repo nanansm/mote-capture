@@ -52,8 +52,21 @@ export async function markPaid(
   boothId: string,
   sessionId: string,
   meta?: Record<string, unknown>,
-): Promise<void> {
-  await boothStub(env, boothId).markPaid(boothId, sessionId, meta);
+): Promise<boolean> {
+  return boothStub(env, boothId).markPaid(boothId, sessionId, meta);
+}
+
+export type RedeemAttemptResult =
+  | { ok: true }
+  | { ok: false; scope: "session" | "booth"; retryAfterMs: number };
+
+// PRD bagian 8 #9: penghitung rate limit /redeem disimpan di storage BoothDO.
+export async function checkRedeemAttempt(
+  env: Bindings,
+  boothId: string,
+  sessionId: string,
+): Promise<RedeemAttemptResult> {
+  return boothStub(env, boothId).checkRedeemAttempt(boothId, sessionId);
 }
 
 export async function markExpired(

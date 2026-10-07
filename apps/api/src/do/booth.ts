@@ -48,6 +48,7 @@ import {
   isPush,
   isRequest,
   MOCK_BRIDGE,
+  REDEEM_LIMITS,
   SocketEvents,
   type ActiveSessionSnapshot,
   type FrameLayout,
@@ -698,16 +699,19 @@ export class BoothDO extends DurableObject<Bindings> {
   // it — that's how it built the DO stub) rather than trusted from storage.
   // -------------------------------------------------------------------
 
-  async markPaid(boothId: string, sessionId: string, meta?: Record<string, unknown>): Promise<void> {
+  // Balas true kalau sesi benar-benar berpindah payment -> paid. Pemanggil
+  // (voucher) memakai ini untuk mengembalikan kuota kalau transisi tidak
+  // terjadi, supaya voucher tidak hangus tanpa sesi.
+  async markPaid(boothId: string, sessionId: string, meta?: Record<string, unknown>): Promise<boolean> {
     const db = getDb(this.env.DB);
     const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
     if (!session || session.boothId !== boothId) {
       logger.warn("booth_do_mark_paid_session_mismatch", { boothId, sessionId });
-      return;
+      return false;
     }
     if (session.status !== "payment") {
       logger.info("booth_do_mark_paid_noop", { boothId, sessionId, status: session.status });
-      return;
+      return false;
     }
 
     await db.update(schema.sessions).set({ status: "paid", paidAt: new Date() }).where(eq(schema.sessions.id, sessionId));
@@ -725,6 +729,47 @@ export class BoothDO extends DurableObject<Bindings> {
       amount: session.amount,
     });
     logger.info("booth_do_mark_paid", { boothId, sessionId, meta });
+    return true;
+  }
+
+  // PRD bagian 8 #9: rate limit /api/voucher/redeem. Jendela geser
+  // REDEEM_LIMITS.WINDOW_MS, maks PER_SESSION per sesi dan PER_BOOTH per booth.
+  // Dicek SEBELUM kode voucher dicari, jadi tebakan kode salah ikut terhitung
+  // (itu tujuannya: rem brute force kode 8 karakter). DO single-threaded, jadi
+  // baca-ubah-tulis di sini tidak race walau dua tap datang bersamaan.
+  // Kunci sesi yang sudah lewat jendela dibersihkan tiap panggilan supaya
+  // storage tidak tumbuh tanpa batas.
+  async checkRedeemAttempt(
+    boothId: string,
+    sessionId: string,
+    now: number = Date.now(),
+  ): Promise<{ ok: true } | { ok: false; scope: "session" | "booth"; retryAfterMs: number }> {
+    const { PER_SESSION, PER_BOOTH, WINDOW_MS } = REDEEM_LIMITS;
+    const cutoff = now - WINDOW_MS;
+    const fresh = (xs: number[] | undefined) => (xs ?? []).filter((t) => t > cutoff);
+
+    const boothKey = "redeem:booth";
+    const sessionKey = `redeem:session:${sessionId}`;
+    const boothHits = fresh(await this.ctx.storage.get<number[]>(boothKey));
+    const sessionHits = fresh(await this.ctx.storage.get<number[]>(sessionKey));
+
+    // Sapu kunci sesi lain yang sudah basi.
+    const all = await this.ctx.storage.list<number[]>({ prefix: "redeem:session:" });
+    const stale: string[] = [];
+    for (const [k, v] of all) if (k !== sessionKey && fresh(v).length === 0) stale.push(k);
+    if (stale.length) await this.ctx.storage.delete(stale);
+
+    if (sessionHits.length >= PER_SESSION) {
+      logger.warn("redeem_rate_limited", { boothId, sessionId, scope: "session" });
+      return { ok: false, scope: "session", retryAfterMs: Math.max(0, sessionHits[0]! + WINDOW_MS - now) };
+    }
+    if (boothHits.length >= PER_BOOTH) {
+      logger.warn("redeem_rate_limited", { boothId, sessionId, scope: "booth" });
+      return { ok: false, scope: "booth", retryAfterMs: Math.max(0, boothHits[0]! + WINDOW_MS - now) };
+    }
+    await this.ctx.storage.put(sessionKey, [...sessionHits, now]);
+    await this.ctx.storage.put(boothKey, [...boothHits, now]);
+    return { ok: true };
   }
 
   async markExpired(boothId: string, sessionId: string): Promise<void> {
