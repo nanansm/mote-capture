@@ -27,6 +27,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { imageExtForMime } from "@capture/shared";
 import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/db";
@@ -98,12 +99,13 @@ function validateUploadHeaders(c: BridgeContext): { contentType: string } | { er
   }
   const validationError = validateUpload({ type: contentType, size });
   if (validationError === "invalid_mime") {
-    return { errorResponse: c.json({ error: "Hanya file PNG yang diperbolehkan" }, 400) };
+    return { errorResponse: c.json({ error: "Hanya file PNG atau JPEG yang diperbolehkan" }, 400) };
   }
   if (validationError === "too_large") {
     return { errorResponse: c.json({ error: "Ukuran file melebihi 5MB" }, 400) };
   }
-  return { contentType };
+  // Simpan tanpa parameter, huruf kecil: dipakai juga untuk ekstensi kunci R2.
+  return { contentType: contentType.split(";")[0]!.trim().toLowerCase() };
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +204,7 @@ sessionUploadRoutes.put("/:id/photos", async (c) => {
   const sortOrderRaw = c.req.query("sortOrder");
   const sortOrder = sortOrderRaw ? Number(sortOrderRaw) || 0 : 0;
 
-  const key = sessionAssetKey(session.boothId, session.id, `photo-${sortOrder}.png`);
+  const key = sessionAssetKey(session.boothId, session.id, `photo-${sortOrder}.${imageExtForMime(contentType)}`);
   await uploadObject(c.env.BUCKET, { key, body, contentType });
 
   await onPhotoUploaded(c.env, session.boothId, {
@@ -228,7 +230,7 @@ sessionUploadRoutes.put("/:id/composite", async (c) => {
   const body = c.req.raw.body;
   if (!body) return c.json({ error: "Body kosong" }, 400);
 
-  const key = sessionAssetKey(session.boothId, session.id, "composite.png");
+  const key = sessionAssetKey(session.boothId, session.id, `composite.${imageExtForMime(contentType)}`);
   await uploadObject(c.env.BUCKET, { key, body, contentType });
 
   await onCompositeUploaded(c.env, session.boothId, {

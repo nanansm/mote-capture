@@ -48,7 +48,7 @@ upload.post("/", async (c) => {
     return c.json({ error: "Tipe upload tidak valid" }, 400);
   }
 
-  const validationError = validateUpload({ type: file.type, size: file.size });
+  const validationError = validateUpload({ type: file.type, size: file.size }, "frame-asset");
   if (validationError === "invalid_mime") {
     return c.json({ error: "Hanya file PNG yang diperbolehkan" }, 400);
   }

@@ -1,6 +1,6 @@
 // Socket.io event names + payload types shared between cloud + bridge + admin.
-import type { Frame } from "./frame";
-import type { SessionStatus } from "./session";
+import type { Frame, FrameLayoutV2 } from "./frame";
+import type { ActiveSessionSnapshot, SessionStatus } from "./session";
 
 export const SocketEvents = {
   // Cloud → Kiosk
@@ -54,8 +54,8 @@ export type KioskReadyPayload = {
   boothId: string;
   boothName: string;
   defaultPrice: number;
-  bridgeOnline: boolean;
-  useMockBridge: boolean;
+  /** Sesi yang masih hidup di DO, untuk pemulihan kiosk setelah reload (PRD bagian 5). */
+  activeSession: ActiveSessionSnapshot | null;
 };
 
 export type FrameSelectedPayload = {
@@ -131,9 +131,17 @@ export type AdminSessionUpdatePayload = {
   amount: number;
 };
 
+/** Kode error yang kiosk perlu bedakan. String lain tetap boleh. */
+export type KnownErrorCode =
+  | "BOOTH_BUSY" // sesi lain masih paid/capturing; lihat `releasesAt`
+  | "SESSION_NOT_PAID" // capture:start ditolak (mis. sudah abandoned_paid)
+  | "SESSION_STALE"; // markDone ditolak: voucher pengganti sudah terpakai
+
 export type ErrorPayload = {
-  code: string;
+  code: KnownErrorCode | (string & {});
   message: string;
+  /** BOOTH_BUSY: kapan alarm tahap aktif membebaskan booth (ISO). */
+  releasesAt?: string;
 };
 
 // Kiosk boot data
@@ -145,8 +153,9 @@ export type KioskBootData = {
     defaultPrice: number;
     paymentProvider: string;
     isActive: boolean;
-    useMockBridge: boolean;
   };
+  // Hanya frame dengan layout v2 valid. Dipakai kiosk (pilih frame) dan
+  // booth-agent (compose + cache artwork lokal).
   frames: Array<
     Pick<
       Frame,
@@ -160,7 +169,7 @@ export type KioskBootData = {
       | "boothId"
       | "isDefault"
       | "sortOrder"
-    >
+    > & { layoutJson: FrameLayoutV2 }
   >;
   settings: {
     defaultCurrency: "IDR";

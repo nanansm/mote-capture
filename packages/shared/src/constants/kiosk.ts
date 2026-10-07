@@ -1,28 +1,60 @@
-// Timing constants for kiosk state machine. All values in milliseconds.
+// Timing constants for the kiosk state machine and BoothDO alarms.
+// All values in milliseconds. Source of truth: docs/prd-booth-minipc.md
+// bagian 5, 7, 8 (draft 3, 30 Sep 2026).
 export const KIOSK_TIMING = {
-  IDLE_RESET_MS: 5 * 60 * 1000, // 5 min
-  PAYMENT_TIMEOUT_MS: 5 * 60 * 1000,
-  GET_READY_MS: 10_000, // pre-photo-1 only; gives guests time to pose
-  COUNTDOWN_PER_PHOTO_MS: 8000, // 5s countdown + 3s capture window
+  IDLE_RESET_MS: 5 * 60 * 1000, // PILIH_FRAME / KONFIRMASI / VOUCHER_INPUT tanpa sentuhan
+  // Sama dengan `expires_at` QR Xendit dan alarm `qr_expiry` DO.
+  PAYMENT_TIMEOUT_MS: 60_000,
+  // PEMBAYARAN_OK tanpa tekan "Mulai Foto" -> IDLE. Sama dengan alarm
+  // `paid_timeout` DO (SESSION_TIMING.PAID_START_TIMEOUT_MS).
+  PAID_START_TIMEOUT_MS: 3 * 60 * 1000,
+  GET_READY_MS: 10_000, // fase "Siap-siap" sebelum foto 1 saja
+  // Hitung mundur murni. "TAHAN!" berakhir oleh event agent `shutter_fired`.
+  COUNTDOWN_PER_PHOTO_MS: 5000,
   COUNTDOWN_TICK_MS: 1000,
-  // "CHEESE!" has to sit on screen long enough for a guest to react to it
-  // before the shutter fires. Firing on the same frame the word appears is
-  // what made the first booth test feel inhuman: the photo was already taken
-  // by the time anyone read the cue.
-  CHEESE_HOLD_MS: 1200,
-  // Beat after the flash, before the next photo's countdown starts, so the
-  // three shots don't run together. Only applies between photos.
-  POST_CAPTURE_HOLD_MS: 800,
   COUNTDOWN_FLASH_MS: 300,
-  LIVE_PREVIEW_POLL_MS: 150,
-  PROCESSING_TIMEOUT_MS: 30_000,
+  // Compose saja; cetak tidak ditunggu di layar.
+  PROCESSING_TIMEOUT_MS: 20_000,
+  // REVIEW_SHOT auto-maju ke foto berikutnya.
   PREVIEW_AUTO_ADVANCE_MS: 5000,
+  DONE_AUTO_RESET_MS: 60_000, // waktu scan QR share
+  // Tanpa `photo.ready` dari agent selama ini -> CALL_STAFF.
+  CAPTURE_WAIT_MS: 15_000,
+  PHOTO_COUNT: 4,
+  // ws /agent/ws putus lebih lama dari ini -> CALL_STAFF.
+  AGENT_WS_GRACE_MS: 10_000,
+  // Kode voucher salah sebanyak ini -> kembali ke KONFIRMASI.
+  VOUCHER_MAX_WRONG: 5,
+
+  // --- Deprecated: hanya dipakai UI kiosk lama, dihapus saat M2. ---
+  /** @deprecated diganti event agent `shutter_fired`. */
+  CHEESE_HOLD_MS: 1200,
+  /** @deprecated diganti state REVIEW_SHOT. */
+  POST_CAPTURE_HOLD_MS: 800,
+  /** @deprecated preview memakai `<img src="/preview.mjpeg">` dari agent. */
+  LIVE_PREVIEW_POLL_MS: 150,
+  /** @deprecated INPUT_KONTAK dihapus (tanpa WhatsApp). */
   CONTACT_TIMEOUT_MS: 60_000,
-  DONE_AUTO_RESET_MS: 8000,
-  CAPTURE_WAIT_MS: 60_000, // wait per photo from bridge
-  PHOTO_COUNT: 3,
 } as const;
 
+// Alarm BoothDO per tahap (PRD bagian 7). Satu alarm per DO.
+export const SESSION_TIMING = {
+  QR_EXPIRY_MINUTES: 1,
+  QR_EXPIRY_MS: KIOSK_TIMING.PAYMENT_TIMEOUT_MS,
+  // Sesi voucher menunggu input kode; sama dengan IDLE_RESET kiosk.
+  VOUCHER_INPUT_EXPIRY_MS: KIOSK_TIMING.IDLE_RESET_MS,
+  PAID_START_TIMEOUT_MS: KIOSK_TIMING.PAID_START_TIMEOUT_MS,
+  CAPTURE_TIMEOUT_MS: 10 * 60 * 1000,
+} as const;
+
+// Rate limit /api/voucher/redeem (PRD bagian 8 #9).
+export const REDEEM_LIMITS = {
+  PER_SESSION: 5,
+  PER_BOOTH: 30,
+  WINDOW_MS: 10 * 60 * 1000,
+} as const;
+
+/** @deprecated jalur mock bridge dibuang di M1 langkah 7. */
 export const MOCK_BRIDGE = {
   CAPTURE_DELAY_MS: 8000,
   COMPOSITE_DELAY_MS: 3000,

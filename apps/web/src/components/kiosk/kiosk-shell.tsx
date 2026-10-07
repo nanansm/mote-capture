@@ -113,8 +113,10 @@ export function KioskShell(props: Props) {
       unsubs.push(() => client.off(ev, wrapped));
     };
 
-    bind<KioskReadyPayload>(SocketEvents.KIOSK_READY, (data) => {
-      dispatch({ type: "SET_BRIDGE_STATUS", online: data.bridgeOnline, mockMode: data.useMockBridge });
+    // Kamera kini dikendalikan booth-agent lokal, bukan bridge cloud. Status
+    // kamera datang dari `/agent/ws` (M2); sementara anggap selalu online.
+    bind<KioskReadyPayload>(SocketEvents.KIOSK_READY, () => {
+      dispatch({ type: "SET_BRIDGE_STATUS", online: true, mockMode: false });
     });
     // Not currently pushed by BoothDO (session:create's *reply* carries the
     // QR data instead — see requestSession below) — bound anyway so the

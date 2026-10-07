@@ -20,7 +20,7 @@
 //    on Workers Free for every kiosk render.
 //  - There is no "mock mode" fallback to local disk; Workers don't have one.
 
-import { ALLOWED_IMAGE_MIME, MAX_UPLOAD_BYTES } from "@capture/shared";
+import { ALLOWED_FRAME_ASSET_MIME, ALLOWED_IMAGE_MIME, MAX_UPLOAD_BYTES } from "@capture/shared";
 import { logger } from "@/lib/logger";
 
 // ---------------------------------------------------------------------------
@@ -167,8 +167,18 @@ export function getPublicUrl(cdnBase: string, key: string): string {
 
 export type UploadValidationError = "invalid_mime" | "too_large";
 
-export function validateUpload(file: { type: string; size: number }): UploadValidationError | null {
-  if (!ALLOWED_IMAGE_MIME.includes(file.type)) return "invalid_mime";
+/**
+ * `kind: "session"` (default) = foto/composite dari booth (PNG/JPEG).
+ * `kind: "frame-asset"` = artwork admin, wajib PNG (butuh transparansi).
+ * Content-Type dibandingkan tanpa parameter (`image/jpeg; charset=...`).
+ */
+export function validateUpload(
+  file: { type: string; size: number },
+  kind: "session" | "frame-asset" = "session",
+): UploadValidationError | null {
+  const mime = file.type.split(";")[0]!.trim().toLowerCase();
+  const allowed = kind === "frame-asset" ? ALLOWED_FRAME_ASSET_MIME : ALLOWED_IMAGE_MIME;
+  if (!allowed.includes(mime)) return "invalid_mime";
   if (file.size > MAX_UPLOAD_BYTES) return "too_large";
   return null;
 }

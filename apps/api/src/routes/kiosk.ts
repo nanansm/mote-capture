@@ -12,11 +12,12 @@
 // boundary, while D1 keeps storing the bare key.
 import { Hono } from "hono";
 import { and, asc, desc, eq, gte, isNull, lte, or } from "drizzle-orm";
-import type { KioskBootData } from "@capture/shared";
+import { isLayoutV2, type KioskBootData } from "@capture/shared";
 import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/db";
 import { getPublicUrl } from "@/lib/storage";
+import { logger } from "@/lib/logger";
 
 const kiosk = new Hono<{ Bindings: Bindings }>();
 
@@ -55,8 +56,15 @@ kiosk.get("/boot", async (c) => {
     )
     .orderBy(asc(schema.frames.sortOrder), desc(schema.frames.createdAt));
 
-  const useMockBridge =
-    ((booth.metadata as Record<string, unknown> | null)?.use_mock_bridge as boolean | undefined) ?? true;
+  // Hanya frame layout v2 (PRD bagian 8 #14). Frame v1 (strip 2×3) tidak
+  // bisa dicompose agent, jadi disaring di sini, bukan dibiarkan gagal di booth.
+  const v2Frames = frameRows.filter((f) => isLayoutV2(f.layoutJson));
+  if (v2Frames.length !== frameRows.length) {
+    logger.warn("kiosk_boot_skip_v1_frames", {
+      boothId,
+      skipped: frameRows.filter((f) => !isLayoutV2(f.layoutJson)).map((f) => f.id),
+    });
+  }
 
   const data: KioskBootData = {
     booth: {
@@ -66,9 +74,8 @@ kiosk.get("/boot", async (c) => {
       defaultPrice: booth.defaultPrice,
       paymentProvider: booth.paymentProvider,
       isActive: booth.isActive,
-      useMockBridge,
     },
-    frames: frameRows.map((f) => ({
+    frames: v2Frames.map((f) => ({
       id: f.id,
       name: f.name,
       tier: (f.tier as "regular" | "premium") ?? "regular",
@@ -79,6 +86,7 @@ kiosk.get("/boot", async (c) => {
       boothId: f.boothId,
       isDefault: f.isDefault,
       sortOrder: f.sortOrder,
+      layoutJson: f.layoutJson as KioskBootData["frames"][number]["layoutJson"],
     })),
     settings: {
       defaultCurrency: "IDR",

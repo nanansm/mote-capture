@@ -41,7 +41,19 @@
 import { DurableObject } from "cloudflare:workers";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { decode, encode, isPush, isRequest, MOCK_BRIDGE, SocketEvents, type FrameLayout } from "@capture/shared";
+import {
+  BUSY_SESSION_STATUSES,
+  decode,
+  encode,
+  isPush,
+  isRequest,
+  MOCK_BRIDGE,
+  SocketEvents,
+  type ActiveSessionSnapshot,
+  type FrameLayout,
+  type KioskReadyPayload,
+  type SessionStatus,
+} from "@capture/shared";
 import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/db";
@@ -203,21 +215,14 @@ export class BoothDO extends DurableObject<Bindings> {
       // Sent synchronously, in-line with the upgrade itself — no
       // fire-and-forget async gap during which bridgeOnline could be stale
       // (the bug in the old apps/cloud handler).
-      const useMockBridge =
-        ((booth.metadata as Record<string, unknown> | null)?.use_mock_bridge as boolean | undefined) ?? true;
       const bridgeOnline = this.ctx.getWebSockets("bridge").length > 0;
-      server.send(
-        encode({
-          ev: SocketEvents.KIOSK_READY,
-          data: {
-            boothId,
-            boothName: booth.name,
-            defaultPrice: booth.defaultPrice,
-            bridgeOnline,
-            useMockBridge,
-          },
-        }),
-      );
+      const ready: KioskReadyPayload = {
+        boothId,
+        boothName: booth.name,
+        defaultPrice: booth.defaultPrice,
+        activeSession: await this.activeSessionSnapshot(boothId),
+      };
+      server.send(encode({ ev: SocketEvents.KIOSK_READY, data: ready }));
       // Admin dashboard broadcast point (ADMIN_BOOTH_STATUS) — kiosk connect.
       // Ported from apps/cloud/lib/socket/server.ts:120-132. Awaited (not
       // fire-and-forget): this is inside fetch(), and any promise not
@@ -1066,6 +1071,33 @@ export class BoothDO extends DurableObject<Bindings> {
       await this.ctx.storage.deleteAlarm();
     }
     await this.ctx.storage.delete(photosKey(sessionId));
+  }
+
+  /**
+   * Sesi terbaru booth ini yang masih mengunci booth (paid/capturing) atau
+   * masih menunggu bayar. Dikirim di KIOSK_READY agar kiosk yang reload bisa
+   * melanjutkan sesi, bukan kembali ke idle sementara uang sudah masuk.
+   */
+  private async activeSessionSnapshot(boothId: string): Promise<ActiveSessionSnapshot | null> {
+    const db = getDb(this.env.DB);
+    const [row] = await db
+      .select()
+      .from(schema.sessions)
+      .where(eq(schema.sessions.boothId, boothId))
+      .orderBy(desc(schema.sessions.createdAt))
+      .limit(1);
+    if (!row) return null;
+    const status = row.status as SessionStatus;
+    const live = status === "payment" || (BUSY_SESSION_STATUSES as readonly string[]).includes(status);
+    if (!live) return null;
+    const task = await this.ctx.storage.get<AlarmTask>("alarm:task");
+    const alarmAt = task && task.sessionId === row.id ? await this.ctx.storage.getAlarm() : null;
+    return {
+      id: row.id,
+      status,
+      expiresAt: alarmAt ? new Date(alarmAt).toISOString() : null,
+      downloadToken: row.downloadToken ?? null,
+    };
   }
 
   private pushToKiosk(ev: string, data: unknown): void {
