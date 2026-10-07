@@ -5,7 +5,6 @@
   "packageManager": "pnpm@9.12.0",
   "scripts": {
     "dev": "turbo run dev",
-    "dev:cloud": "pnpm --filter cloud dev",
     "dev:bridge": "pnpm --filter bridge dev",
     "dev:api": "pnpm --filter api dev",
     "dev:web": "pnpm --filter web dev",
@@ -13,8 +12,6 @@
     "build:bridge": "pnpm --filter bridge build",
     "lint": "turbo run lint",
     "type-check": "turbo run type-check",
-    "db:migrate": "pnpm --filter @capture/db migrate",
-    "db:generate": "pnpm --filter @capture/db generate",
     "package:bridge:mac": "pnpm --filter bridge package:mac",
     "package:bridge:win": "pnpm --filter bridge package:win",
     "package:bridge:linux": "pnpm --filter bridge package:linux",
