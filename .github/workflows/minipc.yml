@@ -1,0 +1,58 @@
+name: minipc-amd64
+
+# Build + tes paket mini PC booth (Debian 13 amd64) di runner x86 asli.
+# Hasil: .deb Gutenprint 5.3.6, booth-agent-amd64.tar.gz, log 22 cek setup.
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/booth-minipc]
+    paths:
+      - "deploy/minipc/**"
+      - "apps/booth-agent/**"
+      - ".github/workflows/minipc.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.1
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Gutenprint 5.3.6 (backport sid -> trixie)
+        working-directory: deploy/minipc
+        run: ARCH=amd64 ./build-gutenprint.sh
+
+      - name: Release booth-agent
+        working-directory: deploy/minipc
+        run: ARCH=amd64 ./build-release.sh
+
+      - name: Tes setup.sh (Debian 13 + systemd)
+        working-directory: deploy/minipc
+        run: ARCH=amd64 ./test-setup.sh
+
+      - name: Upload hasil
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minipc-amd64
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            deploy/minipc/out/amd64/*.deb
+            deploy/minipc/out/booth-agent-amd64.tar.gz
+            deploy/minipc/out/setup-amd64-*.log
