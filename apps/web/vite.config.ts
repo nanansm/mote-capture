@@ -6,6 +6,9 @@ import react from "@vitejs/plugin-react";
 // apps/api/wrangler.jsonc). `pnpm dev` here talks to a locally running
 // `wrangler dev` (apps/api) via the proxy below; `pnpm build` outputs to
 // ../api's configured assets directory (apps/web/dist).
+// Rig e2e kiosk mengarahkan proxy ke wrangler dev terisolasi (port lain).
+const API_TARGET = process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8787";
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -17,11 +20,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8787",
+        target: API_TARGET,
         changeOrigin: true,
       },
       "/ws": {
-        target: "http://127.0.0.1:8787",
+        target: API_TARGET,
         ws: true,
         changeOrigin: true,
       },

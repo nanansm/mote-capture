@@ -57,3 +57,7 @@ apps/bridge/installer/output/*.exe
 apps/bridge/installer/assets/installer-icon.ico
 apps/bridge/installer/assets/installer-banner.bmp
 apps/bridge/installer/assets/installer-small.bmp
+
+# Playwright
+test-results*/
+playwright-report*/

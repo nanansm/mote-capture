@@ -5,7 +5,7 @@
 //   3. timer lokal                 -> countdown, review, idle reset
 // Semua efek samping hidup di sini; reducer tidak pernah memanggil I/O.
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   createWsClient,
@@ -554,7 +554,10 @@ export function KioskShell(props: Props) {
       break;
   }
 
+  // reducedMotion "user": animasi transform mati bila OS minta (aksesibilitas;
+  // juga membuat e2e deterministik). Kiosk produksi tetap beranimasi.
   return (
+    <MotionConfig reducedMotion="user">
     <div data-testid="kiosk" data-state={state} data-session-id={context.sessionId ?? ""} className="absolute inset-0">
       {LANG_TOGGLE_STATES.has(state) ? <LanguageToggle lang={lang} setLang={setLang} /> : null}
       <AnimatePresence mode="wait">
@@ -581,10 +584,8 @@ export function KioskShell(props: Props) {
           sessionId={context.sessionId}
           onClose={() => setStaffOpen(false)}
           onResume={onStaffResume}
-          onSessionCancelled={() => {
-            setStaffOpen(false);
-            dispatch({ type: "RESET" });
-          }}
+          // Panel tetap terbuka: staf perlu membaca kode voucher ke pelanggan.
+          onSessionCancelled={() => dispatch({ type: "RESET" })}
           t={t}
         />
       ) : null}
@@ -597,5 +598,6 @@ export function KioskShell(props: Props) {
         </div>
       ) : null}
     </div>
+    </MotionConfig>
   );
 }
