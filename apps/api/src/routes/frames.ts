@@ -16,7 +16,8 @@ import { requireAdmin } from "@/middleware/admin";
 import { getDb, schema } from "@/db";
 import type { FrameRow } from "@/db";
 import { getPublicUrl } from "@/lib/storage";
-import { DEFAULT_LAYOUT_B, frameInputSchema, frameUpdateSchema } from "@/lib/validations/frame";
+import { DEFAULT_LAYOUT_V2 } from "@capture/shared";
+import { frameInputSchema, frameUpdateSchema } from "@/lib/validations/frame";
 import { generateFrameId } from "@/lib/id";
 import { logger } from "@/lib/logger";
 
@@ -73,7 +74,7 @@ frames.post("/", async (c) => {
       seasonStart: data.seasonStart ? new Date(data.seasonStart) : null,
       seasonEnd: data.seasonEnd ? new Date(data.seasonEnd) : null,
       sortOrder: data.sortOrder,
-      layoutJson: data.layoutJson ?? DEFAULT_LAYOUT_B,
+      layoutJson: data.layoutJson ?? DEFAULT_LAYOUT_V2,
     })
     .returning();
 

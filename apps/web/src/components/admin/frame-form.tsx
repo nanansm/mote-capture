@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
+import { DEFAULT_LAYOUT_V2, isLayoutV2 } from "@capture/shared";
 import { frameInputSchema } from "@/lib/validations/frame";
 import { displayUrl, urlToKey } from "@/lib/storage/r2-client";
 
@@ -70,10 +71,11 @@ export function FrameForm({
   const [uploadingBg, setUploadingBg] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [layoutOpen, setLayoutOpen] = useState(false);
+  // PRD bagian 8 #11: textarea tetap, prefill DEFAULT_LAYOUT_V2. Frame lama
+  // (v1) ikut diprefill v2 karena v1 ditolak API dan tidak tampil di kiosk.
+  const initialIsV1 = Boolean(initial?.layoutJson) && !isLayoutV2(initial?.layoutJson);
   const [layoutJsonText, setLayoutJsonText] = useState<string>(
-    initial?.layoutJson && Object.keys(initial.layoutJson).length > 0
-      ? JSON.stringify(initial.layoutJson, null, 2)
-      : "",
+    JSON.stringify(isLayoutV2(initial?.layoutJson) ? initial!.layoutJson : DEFAULT_LAYOUT_V2, null, 2),
   );
   const [layoutError, setLayoutError] = useState<string | null>(null);
 
@@ -374,10 +376,10 @@ export function FrameForm({
               onClick={() => setLayoutOpen((v) => !v)}
             >
               <div>
-                <p className="text-sm font-medium">Layout Advanced (Bridge composer)</p>
+                <p className="text-sm font-medium">Layout v2 (4 foto, 4R portrait)</p>
                 <p className="text-xs text-muted-foreground">
-                  JSON kustom untuk composer bridge. Kosongkan untuk pakai Layout B default
-                  (1800×1200, 2 strip identik).
+                  Kanvas 1200×1800, tepat 4 slot rasio 3:2. Kosongkan untuk pakai default.
+                  {initialIsV1 ? " Frame ini masih layout lama (v1), tersembunyi di kiosk sampai disimpan dengan v2." : ""}
                 </p>
               </div>
               <span className="text-xs text-muted-foreground">{layoutOpen ? "Hide" : "Show"}</span>
@@ -388,18 +390,16 @@ export function FrameForm({
                   className="min-h-[200px] w-full rounded-md border border-input p-2 font-mono text-xs"
                   value={layoutJsonText}
                   onChange={(e) => setLayoutJsonText(e.target.value)}
-                  placeholder={`{\n  "canvasWidth": 1800,\n  "canvasHeight": 1200,\n  "stripCount": 2,\n  "cutLineX": 900,\n  "photoSlots": [\n    { "stripIndex": 0, "x": 65, "y": 80, "width": 770, "height": 320, "photoIndex": 0 },\n    ...\n  ]\n}`}
+                  placeholder={JSON.stringify(DEFAULT_LAYOUT_V2, null, 2)}
                   spellCheck={false}
                 />
                 {layoutError ? (
                   <p className="text-xs text-destructive">{layoutError}</p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    Schema: <code>canvasWidth</code>, <code>canvasHeight</code>,{" "}
-                    <code>stripCount</code>, <code>cutLineX</code>,{" "}
-                    <code>photoSlots[]</code> (each: <code>stripIndex</code>, <code>x</code>,{" "}
-                    <code>y</code>, <code>width</code>, <code>height</code>,{" "}
-                    <code>photoIndex</code>).
+                    Schema: <code>version: 2</code>, <code>canvasWidth: 1200</code>,{" "}
+                    <code>canvasHeight: 1800</code>, <code>slots[4]</code> (each: <code>x</code>,{" "}
+                    <code>y</code>, <code>w</code>, <code>h</code>), <code>artworkKey</code>.
                   </p>
                 )}
               </div>

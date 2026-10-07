@@ -5,40 +5,18 @@
 // `key` from R2, so this is what the frame-create/update form actually has
 // on hand.
 import { z } from "zod";
+import { validateLayoutV2, type FrameLayoutV2 } from "@capture/shared";
 
-const photoSlotSchema = z.object({
-  stripIndex: z.number().int().min(0),
-  x: z.number().int().min(0),
-  y: z.number().int().min(0),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  photoIndex: z.number().int().min(0).max(2),
-});
+// PRD bagian 8 #11. Layout v1 (strip 2×3, 1800×1200) hanya ada di baris D1
+// lama; tidak pernah diterima lagi lewat API. Frame baru/ubah layout wajib v2
+// (1200×1800, 4 slot) dan divalidasi satu sumber: `validateLayoutV2` di shared,
+// yang juga dipakai booth-agent saat compose. Kiosk menyaring frame v1.
+export const frameLayoutSchema = z.unknown().superRefine((v, ctx) => {
+  const errs = validateLayoutV2(v);
+  if (errs.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Layout tidak valid: ${errs.join("; ")}` });
+}) as unknown as z.ZodType<FrameLayoutV2>;
 
-export const frameLayoutSchema = z.object({
-  canvasWidth: z.number().int().positive(),
-  canvasHeight: z.number().int().positive(),
-  photoSlots: z.array(photoSlotSchema).min(1),
-  stripCount: z.number().int().min(1).max(4),
-  cutLineX: z.number().int().min(0).optional(),
-});
-
-export type FrameLayoutInput = z.infer<typeof frameLayoutSchema>;
-
-export const DEFAULT_LAYOUT_B: FrameLayoutInput = {
-  canvasWidth: 1800,
-  canvasHeight: 1200,
-  photoSlots: [
-    { stripIndex: 0, x: 65, y: 80, width: 770, height: 320, photoIndex: 0 },
-    { stripIndex: 0, x: 65, y: 425, width: 770, height: 320, photoIndex: 1 },
-    { stripIndex: 0, x: 65, y: 770, width: 770, height: 320, photoIndex: 2 },
-    { stripIndex: 1, x: 965, y: 80, width: 770, height: 320, photoIndex: 0 },
-    { stripIndex: 1, x: 965, y: 425, width: 770, height: 320, photoIndex: 1 },
-    { stripIndex: 1, x: 965, y: 770, width: 770, height: 320, photoIndex: 2 },
-  ],
-  stripCount: 2,
-  cutLineX: 900,
-};
+export type FrameLayoutInput = FrameLayoutV2;
 
 export const frameInputSchema = z.object({
   name: z.string().min(1, "Nama frame wajib diisi").max(120),
