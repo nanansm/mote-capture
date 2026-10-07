@@ -27,17 +27,19 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { imageExtForMime } from "@capture/shared";
+import { imageExtForMime, KIOSK_TIMING } from "@capture/shared";
 import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/db";
 import type { SessionRow } from "@/db";
 import { getAllSettings } from "@/lib/settings";
 import { downloadKey, getPublicUrl, sessionAssetKey, uploadObject, validateUpload } from "@/lib/storage";
-import { onCompositeUploaded, onPhotoUploaded } from "@/do/rpc";
+import { cancelWithVoucher, markDone, onCompositeUploaded, onPhotoUploaded, setPrintStatus } from "@/do/rpc";
 import { logger } from "@/lib/logger";
 
 type BridgeContext = Context<{ Bindings: Bindings }>;
+
+const TOTAL_PHOTOS = KIOSK_TIMING.PHOTO_COUNT;
 
 // ---------------------------------------------------------------------------
 // Shared bearer-token helpers
@@ -119,6 +121,13 @@ const heartbeatBodySchema = z.object({
   version: z.string().optional(),
   camera: z.record(z.unknown()).optional(),
   printer: z.record(z.unknown()).optional(),
+  // PRD bagian 8 #13: penghitung kertas/tinta dari agent (opsional).
+  counters: z
+    .object({
+      paper: z.number().int().min(0).max(10_000),
+      ink: z.number().int().min(0).max(10_000),
+    })
+    .optional(),
 });
 
 bridgeRoutes.post("/heartbeat", async (c) => {
@@ -145,8 +154,7 @@ bridgeRoutes.post("/heartbeat", async (c) => {
     return c.json({ error: "Token bridge tidak valid" }, 401);
   }
 
-  // Merge onto existing metadata so unrelated keys (e.g. admin-set
-  // `use_mock_bridge`, see src/routes/booths.ts) survive every heartbeat.
+  // Merge ke metadata lama supaya key lain (set admin) tidak hilang tiap heartbeat.
   const metadata = {
     ...((booth.metadata as Record<string, unknown> | null) ?? {}),
     ...rest,
@@ -183,6 +191,76 @@ bridgeRoutes.get("/resolve", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Sesi — dipanggil booth-agent (PRD bagian 8 #13/#16). Bearer bridge_token
+// booth pemilik sesi. Semua idempoten: antrean agent bisa mengulang job.
+// ---------------------------------------------------------------------------
+
+bridgeRoutes.post("/session/:id/done", async (c) => {
+  const auth = await authorizeSessionUpload(c, c.req.param("id"));
+  if ("errorResponse" in auth) return auth.errorResponse;
+  const { session } = auth;
+
+  const result = await markDone(c.env, session.boothId, session.id);
+  if (result.ok) return c.json({ data: result });
+  if (result.code === "SESSION_STALE") {
+    // Voucher pengganti sudah dipakai pelanggan: agent JANGAN mencetak.
+    return c.json({ error: "SESSION_STALE", message: "Sesi sudah diganti voucher yang terpakai" }, 409);
+  }
+  if (result.code === "NOT_FOUND") return c.json({ error: "Session tidak ditemukan" }, 404);
+  return c.json({ error: "INVALID_STATE", status: result.status ?? null }, 409);
+});
+
+const cancelVoucherBodySchema = z.object({ staff: z.string().max(64).optional() }).optional();
+
+bridgeRoutes.post("/session/:id/cancel-voucher", async (c) => {
+  const auth = await authorizeSessionUpload(c, c.req.param("id"));
+  if ("errorResponse" in auth) return auth.errorResponse;
+  const { session } = auth;
+
+  let body: unknown = undefined;
+  if ((c.req.header("content-length") ?? "0") !== "0") {
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Body tidak valid" }, 400);
+    }
+  }
+  const parsed = cancelVoucherBodySchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: "Validasi gagal" }, 400);
+
+  const result = await cancelWithVoucher(c.env, session.boothId, session.id, parsed.data?.staff);
+  if (result.ok) return c.json({ data: result });
+  if (result.code === "NOT_FOUND") return c.json({ error: "Session tidak ditemukan" }, 404);
+  return c.json({ error: "INVALID_STATE", status: result.status ?? null }, 409);
+});
+
+const printStatusBodySchema = z.object({
+  sheet: z.number().int().min(1).max(10),
+  state: z.enum(["queued", "printing", "done", "failed"]),
+  cupsJobId: z.union([z.number(), z.string().max(64)]).nullish(),
+  error: z.string().max(500).nullish(),
+});
+
+bridgeRoutes.post("/session/:id/print-status", async (c) => {
+  const auth = await authorizeSessionUpload(c, c.req.param("id"));
+  if ("errorResponse" in auth) return auth.errorResponse;
+  const { session } = auth;
+
+  let json: unknown;
+  try {
+    json = await c.req.json();
+  } catch {
+    return c.json({ error: "Body tidak valid" }, 400);
+  }
+  const parsed = printStatusBodySchema.safeParse(json);
+  if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Validasi gagal" }, 400);
+
+  const ok = await setPrintStatus(c.env, session.boothId, { sessionId: session.id, ...parsed.data });
+  if (!ok) return c.json({ error: "Session tidak ditemukan" }, 404);
+  return c.json({ data: { ok: true } });
+});
+
+// ---------------------------------------------------------------------------
 // sessionUploadRoutes — mounted at /api/session (no basePath of its own)
 // ---------------------------------------------------------------------------
 
@@ -201,8 +279,12 @@ sessionUploadRoutes.put("/:id/photos", async (c) => {
   const body = c.req.raw.body;
   if (!body) return c.json({ error: "Body kosong" }, 400);
 
-  const sortOrderRaw = c.req.query("sortOrder");
-  const sortOrder = sortOrderRaw ? Number(sortOrderRaw) || 0 : 0;
+  // Slot 1..TOTAL_PHOTOS. Nilai lain ditolak supaya tidak menimpa composite
+  // (sortOrder 99) atau membuat kunci R2 photo-0/photo-NaN.
+  const sortOrder = Number(c.req.query("sortOrder"));
+  if (!Number.isInteger(sortOrder) || sortOrder < 1 || sortOrder > TOTAL_PHOTOS) {
+    return c.json({ error: `sortOrder harus 1..${TOTAL_PHOTOS}` }, 400);
+  }
 
   const key = sessionAssetKey(session.boothId, session.id, `photo-${sortOrder}.${imageExtForMime(contentType)}`);
   await uploadObject(c.env.BUCKET, { key, body, contentType });

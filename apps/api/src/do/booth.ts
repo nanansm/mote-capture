@@ -47,12 +47,11 @@ import {
   encode,
   isPush,
   isRequest,
-  MOCK_BRIDGE,
   REDEEM_LIMITS,
   SESSION_TIMING,
   SocketEvents,
+  TERMINAL_SESSION_STATUSES,
   type ActiveSessionSnapshot,
-  type FrameLayout,
   type KioskReadyPayload,
   type SessionStatus,
 } from "@capture/shared";
@@ -62,13 +61,18 @@ import { getDb, schema } from "@/db";
 import { getPaymentProvider } from "@/lib/payment";
 import { resolveCredentials } from "@/lib/runtime-credentials";
 import { generateDownloadToken, generateSessionId } from "@/lib/id";
-import { getPublicUrl, sessionAssetKey, uploadObject } from "@/lib/storage";
 import { notifySession } from "@/lib/notify";
-import { DEFAULT_LAYOUT_B } from "@/lib/validations/frame";
 import { logger } from "@/lib/logger";
 import { adminBroadcast } from "@/do/rpc";
+import { issueAutoVoucher, type AutoVoucherSource } from "@/lib/auto-voucher";
 
-const TOTAL_PHOTOS = 3;
+// Agent menganggap online kalau heartbeat HTTP terakhir < 2 menit.
+const AGENT_ONLINE_MS = 2 * 60 * 1000;
+
+// SQL fragment: daftar status terminal, dipakai `not in` untuk cari sesi hidup.
+const TERMINAL_STATUS_SQL = sql.raw(
+  `(${TERMINAL_SESSION_STATUSES.map((st) => `'${st}'`).join(",")})`,
+);
 
 // ---------------------------------------------------------------------------
 // Validation — ported from apps/cloud/lib/socket/events.ts, with `method`
@@ -82,11 +86,11 @@ const confirmAndPaySchema = z.object({
   method: z.enum(["qris", "voucher"]).default("qris"),
 });
 
+// PRD bagian 8 #2: capture:start dikirim SEKALI per sesi. Progres per foto
+// (termasuk retake) milik agent, bukan DO. Field lain (photoIndex dari kiosk
+// lama) dibuang zod.
 const startCaptureSchema = z.object({
   sessionId: z.string().min(1),
-  // Which photo the kiosk wants shot now. Absent = 1, so an older kiosk build
-  // that only ever asked for the first photo still starts a session.
-  photoIndex: z.number().int().min(1).max(3).optional(),
 });
 
 const submitContactSchema = z.object({
@@ -100,25 +104,35 @@ const cancelSchema = z.object({
   reason: z.string().optional(),
 });
 
-const printCompletedSchema = z.object({
-  sessionId: z.string().min(1),
-});
-
 // ---------------------------------------------------------------------------
 // Local types
 // ---------------------------------------------------------------------------
 
-type HandlerResult = { ok: true; data?: unknown } | { ok: false; error: string };
+type HandlerResult =
+  | { ok: true; data?: unknown }
+  | { ok: false; error: string; code?: string; releasesAt?: string | null };
 
+// Satu alarm per DO (satu sesi aktif per booth). PRD bagian 7.
 type AlarmTask =
   | { type: "qr_expiry"; sessionId: string }
-  | { type: "mock_capture"; sessionId: string; index: number }
-  | { type: "mock_composite"; sessionId: string }
-  | { type: "mock_print"; sessionId: string };
+  | { type: "paid_timeout"; sessionId: string }
+  | { type: "capture_timeout"; sessionId: string };
 
-function photosKey(sessionId: string): string {
-  return `photos:${sessionId}`;
-}
+export type MarkDoneResult =
+  | { ok: true; status: "done"; disabledVoucherId?: string }
+  | { ok: false; code: "SESSION_STALE" | "INVALID_STATE" | "NOT_FOUND"; status?: string };
+
+export type CancelVoucherResult =
+  | { ok: true; voucherId: string; code: string; created: boolean }
+  | { ok: false; code: "INVALID_STATE" | "NOT_FOUND"; status?: string };
+
+export type PrintStatusInput = {
+  sessionId: string;
+  sheet: number;
+  state: "queued" | "printing" | "done" | "failed";
+  cupsJobId?: number | string | null;
+  error?: string | null;
+};
 
 // Ported from apps/cloud/lib/session-helpers.ts#resolvePrice. `tier` is unused
 // by the actual logic there (frame.price is always the source of truth when
@@ -129,63 +143,15 @@ function resolvePrice(frame: { price: number } | null, boothDefaultPrice: number
 }
 
 // ---------------------------------------------------------------------------
-// Mock-bridge placeholder assets — simplified port of
-// apps/cloud/lib/kiosk/placeholder-photos.ts (SVG, not pixel-identical, just
-// visually equivalent placeholders for the simulated capture/composite).
-// ---------------------------------------------------------------------------
-
-function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-function generatePlaceholderPhotoSvg(index: number, sessionId: string): string {
-  const w = 800;
-  const h = 600;
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
-  <rect width="100%" height="100%" fill="#F5E642"/>
-  <g font-family="sans-serif" fill="#1A3A2A" text-anchor="middle">
-    <text x="50%" y="45%" font-size="80" font-weight="800">PHOTO ${index}</text>
-    <text x="50%" y="58%" font-size="28" opacity="0.6">${escapeXml(sessionId)}</text>
-  </g>
-</svg>`;
-}
-
-function generatePlaceholderCompositeSvg(sessionId: string, boothName: string): string {
-  const w = 1800;
-  const h = 1200;
-  const colors = ["#F5E642", "#E8A598", "#86C67C"];
-  const cells: string[] = [];
-  for (let col = 0; col < 2; col++) {
-    for (let row = 0; row < 3; row++) {
-      const x = 40 + col * 840;
-      const y = 40 + row * 390;
-      cells.push(
-        `<g transform="translate(${x},${y})"><rect width="760" height="360" rx="20" fill="${colors[row]}"/><text x="380" y="190" text-anchor="middle" font-size="40" font-weight="800" fill="#1A3A2A">PHOTO ${row + 1}</text></g>`,
-      );
-    }
-  }
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
-  <rect width="100%" height="100%" fill="#F5F0E8"/>
-  ${cells.join("")}
-  <text x="${w / 2}" y="${h - 16}" text-anchor="middle" font-size="24" font-weight="700" fill="#1A3A2A">${escapeXml(
-    boothName.toUpperCase(),
-  )} · MOTE CAPTURE</text>
-</svg>`;
-}
-
-// ---------------------------------------------------------------------------
 // BoothDO
 // ---------------------------------------------------------------------------
 
 export class BoothDO extends DurableObject<Bindings> {
   // -------------------------------------------------------------------
-  // fetch() — WebSocket upgrade entrypoint only. The Worker
-  // (src/index.ts) has already authenticated the caller (booth
-  // active for kiosk; bridgeToken bearer match for bridge) before
-  // forwarding here with the path rewritten to `/kiosk/:boothId` or
-  // `/bridge/:boothId`.
+  // fetch() — upgrade WebSocket kiosk saja. Worker (src/index.ts) sudah
+  // memvalidasi booth aktif sebelum meneruskan ke `/kiosk/:boothId`.
+  // Jalur ws bridge dibuang (PRD bagian 8 #15): agent bicara ke cloud lewat
+  // HTTP `/api/bridge/*` dengan bearer `booths.bridge_token`.
   // -------------------------------------------------------------------
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") !== "websocket") {
@@ -196,7 +162,7 @@ export class BoothDO extends DurableObject<Bindings> {
     const parts = url.pathname.split("/").filter(Boolean);
     const role = parts[0];
     const boothId = parts[1];
-    if ((role !== "kiosk" && role !== "bridge") || !boothId) {
+    if (role !== "kiosk" || !boothId) {
       return new Response("Not found", { status: 404 });
     }
 
@@ -211,46 +177,24 @@ export class BoothDO extends DurableObject<Bindings> {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    this.ctx.acceptWebSocket(server, [role]);
+    this.ctx.acceptWebSocket(server, ["kiosk"]);
 
-    if (role === "kiosk") {
-      // Sent synchronously, in-line with the upgrade itself — no
-      // fire-and-forget async gap during which bridgeOnline could be stale
-      // (the bug in the old apps/cloud handler).
-      const bridgeOnline = this.ctx.getWebSockets("bridge").length > 0;
-      const ready: KioskReadyPayload = {
-        boothId,
-        boothName: booth.name,
-        defaultPrice: booth.defaultPrice,
-        activeSession: await this.activeSessionSnapshot(boothId),
-      };
-      server.send(encode({ ev: SocketEvents.KIOSK_READY, data: ready }));
-      // Admin dashboard broadcast point (ADMIN_BOOTH_STATUS) — kiosk connect.
-      // Ported from apps/cloud/lib/socket/server.ts:120-132. Awaited (not
-      // fire-and-forget): this is inside fetch(), and any promise not
-      // awaited before the 101 Response is returned risks being cancelled
-      // by the runtime once the request context ends. adminBroadcast()
-      // itself never throws (see src/do/rpc.ts), so this cannot fail the
-      // upgrade.
-      await adminBroadcast(this.env, SocketEvents.ADMIN_BOOTH_STATUS, {
-        boothId,
-        online: true,
-        inSession: false,
-        lastSeenAt: new Date().toISOString(),
-        bridgeOnline,
-      });
-    } else {
-      await db.update(schema.booths).set({ lastSeenAt: new Date() }).where(eq(schema.booths.id, boothId));
-      // Admin dashboard broadcast point (ADMIN_BOOTH_STATUS) — bridge connect.
-      // Ported from apps/cloud/lib/socket/handlers/bridge.ts:26-37.
-      await adminBroadcast(this.env, SocketEvents.ADMIN_BOOTH_STATUS, {
-        boothId,
-        online: this.ctx.getWebSockets("kiosk").length > 0,
-        inSession: false,
-        lastSeenAt: new Date().toISOString(),
-        bridgeOnline: true,
-      });
-    }
+    const ready: KioskReadyPayload = {
+      boothId,
+      boothName: booth.name,
+      defaultPrice: booth.defaultPrice,
+      activeSession: await this.activeSessionSnapshot(boothId),
+    };
+    server.send(encode({ ev: SocketEvents.KIOSK_READY, data: ready }));
+    // Awaited: promise yang tidak di-await sebelum Response 101 bisa
+    // dibatalkan runtime. adminBroadcast() tidak pernah throw.
+    await adminBroadcast(this.env, SocketEvents.ADMIN_BOOTH_STATUS, {
+      boothId,
+      online: true,
+      inSession: ready.activeSession !== null,
+      lastSeenAt: new Date().toISOString(),
+      bridgeOnline: agentOnline(booth.lastSeenAt),
+    });
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -277,18 +221,16 @@ export class BoothDO extends DurableObject<Bindings> {
       return; // a Reply arriving here has no meaning — drop
     }
 
-    const tags = this.ctx.getTags(ws);
-    const role = tags.includes("bridge") ? "bridge" : tags.includes("kiosk") ? "kiosk" : null;
-    if (!role) return;
+    if (!this.ctx.getTags(ws).includes("kiosk")) return;
 
     const boothId = (await this.ctx.storage.get<string>("boothId")) ?? "";
 
     let result: HandlerResult;
     try {
-      result = role === "kiosk" ? await this.dispatchKiosk(boothId, ev, data) : await this.dispatchBridge(boothId, ev, data);
+      result = await this.dispatchKiosk(boothId, ev, data);
     } catch (err) {
       const message2 = err instanceof Error ? err.message : "internal error";
-      logger.error("booth_do_handler_failed", { boothId, role, ev, err: message2 });
+      logger.error("booth_do_handler_failed", { boothId, ev, err: message2 });
       result = { ok: false, error: message2 };
     }
 
@@ -296,14 +238,20 @@ export class BoothDO extends DurableObject<Bindings> {
       ws.send(
         result.ok
           ? encode({ id: replyId, ok: true, data: result.data })
-          : encode({ id: replyId, ok: false, error: result.error }),
+          : encode({
+              id: replyId,
+              ok: false,
+              error: result.error,
+              ...(result.code ? { code: result.code } : {}),
+              ...(result.releasesAt !== undefined ? { releasesAt: result.releasesAt } : {}),
+            }),
       );
     }
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     logger.info("booth_do_ws_close", { code, reason, wasClean, tags: this.ctx.getTags(ws) });
-    await this.broadcastDisconnect(ws);
+    await this.broadcastDisconnect();
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
@@ -311,37 +259,27 @@ export class BoothDO extends DurableObject<Bindings> {
       tags: this.ctx.getTags(ws),
       err: error instanceof Error ? error.message : String(error),
     });
-    await this.broadcastDisconnect(ws);
+    await this.broadcastDisconnect();
   }
 
-  // Admin dashboard broadcast point (ADMIN_BOOTH_STATUS) — kiosk/bridge
-  // disconnect. Ported from apps/cloud/lib/socket/server.ts:142-155 (kiosk)
-  // and apps/cloud/lib/socket/handlers/bridge.ts:117-125 (bridge). Shared by
-  // both webSocketClose and webSocketError since Cloudflare only guarantees
-  // one of the two fires per closed socket, and either way the connection is
-  // gone — the admin dashboard needs to know regardless of *how* it closed.
-  private async broadcastDisconnect(ws: WebSocket): Promise<void> {
-    const tags = this.ctx.getTags(ws);
+  // Cloudflare hanya menjamin salah satu dari close/error terpanggil per
+  // socket, jadi keduanya memakai helper ini.
+  private async broadcastDisconnect(): Promise<void> {
     const boothId = (await this.ctx.storage.get<string>("boothId")) ?? "";
     if (!boothId) return;
-
-    if (tags.includes("kiosk")) {
-      await adminBroadcast(this.env, SocketEvents.ADMIN_BOOTH_STATUS, {
-        boothId,
-        online: false,
-        inSession: false,
-        lastSeenAt: new Date().toISOString(),
-        bridgeOnline: this.ctx.getWebSockets("bridge").length > 0,
-      });
-    } else if (tags.includes("bridge")) {
-      await adminBroadcast(this.env, SocketEvents.ADMIN_BOOTH_STATUS, {
-        boothId,
-        online: this.ctx.getWebSockets("kiosk").length > 0,
-        inSession: false,
-        lastSeenAt: new Date().toISOString(),
-        bridgeOnline: false,
-      });
-    }
+    const db = getDb(this.env.DB);
+    const [booth] = await db
+      .select({ lastSeenAt: schema.booths.lastSeenAt })
+      .from(schema.booths)
+      .where(eq(schema.booths.id, boothId))
+      .limit(1);
+    await adminBroadcast(this.env, SocketEvents.ADMIN_BOOTH_STATUS, {
+      boothId,
+      online: this.ctx.getWebSockets("kiosk").length > 0,
+      inSession: false,
+      lastSeenAt: new Date().toISOString(),
+      bridgeOnline: agentOnline(booth?.lastSeenAt ?? null),
+    });
   }
 
   // -------------------------------------------------------------------
@@ -359,19 +297,6 @@ export class BoothDO extends DurableObject<Bindings> {
         return this.handleCancel(boothId, data);
       default:
         return { ok: false, error: `Unknown kiosk event: ${ev}` };
-    }
-  }
-
-  private async dispatchBridge(boothId: string, ev: string, data: unknown): Promise<HandlerResult> {
-    switch (ev) {
-      case SocketEvents.BRIDGE_HELLO:
-        return this.handleBridgeHello(boothId, data);
-      case SocketEvents.PRINT_COMPLETED:
-        return this.handlePrintCompleted(boothId, data);
-      case SocketEvents.BRIDGE_ERROR:
-        return this.handleBridgeError(boothId, data);
-      default:
-        return { ok: false, error: `Unknown bridge event: ${ev}` };
     }
   }
 
@@ -393,42 +318,33 @@ export class BoothDO extends DurableObject<Bindings> {
 
     const db = getDb(this.env.DB);
 
-    // One active (non-terminal) session per booth at a time — this is what
-    // makes the single-alarm-per-DO design safe (QR expiry and mock-bridge
-    // timers never need to coexist).
+    // Satu sesi hidup per booth — itu yang membuat satu alarm per DO cukup.
     //
-    // A leftover session is only a real conflict once money has changed hands:
-    // `paid`/`capturing`/`processing` means somebody is physically mid-session
-    // at this booth. A session still sitting at `payment` (or `idle`) is an
-    // abandoned checkout — the customer walked away, or the kiosk reloaded
-    // before CANCEL was sent. Rejecting those would leave the booth unusable
-    // until the QR expiry alarm fires (up to 5 minutes of lost sales), so we
-    // retire them here and continue.
+    // Sesi `paid/capturing/processing` = uang sudah masuk, pelanggan sedang
+    // di booth: tolak dengan BOOTH_BUSY + releasesAt (alarm tahap yang akan
+    // membebaskan, PRD bagian 7). Sesi `payment`/`idle` = checkout yang
+    // ditinggal: pensiunkan lalu lanjut, supaya booth tidak menganggur
+    // sampai QR kedaluwarsa.
     const [existingActive] = await db
       .select({ id: schema.sessions.id, status: schema.sessions.status })
       .from(schema.sessions)
-      .where(
-        and(
-          eq(schema.sessions.boothId, ownBoothId),
-          sql`${schema.sessions.status} not in ('done','expired','failed')`,
-        ),
-      )
+      .where(and(eq(schema.sessions.boothId, ownBoothId), sql`${schema.sessions.status} not in ${TERMINAL_STATUS_SQL}`))
       .limit(1);
     if (existingActive) {
-      if (existingActive.status !== "payment" && existingActive.status !== "idle") {
-        return { ok: false, error: "Sesi lain sedang berlangsung di booth ini" };
+      if ((BUSY_SESSION_STATUSES as readonly string[]).includes(existingActive.status)) {
+        const releasesAt = await this.alarmAtFor(existingActive.id);
+        return {
+          ok: false,
+          code: "BOOTH_BUSY",
+          error: "Booth sedang dipakai",
+          releasesAt: releasesAt ? new Date(releasesAt).toISOString() : null,
+        };
       }
       await db
         .update(schema.sessions)
         .set({ status: "expired" })
         .where(eq(schema.sessions.id, existingActive.id));
-      // Drop the alarm that belonged to the abandoned session so it cannot
-      // fire against the session we are about to create.
-      const pending = await this.ctx.storage.get<AlarmTask>("alarm:task");
-      if (pending && "sessionId" in pending && pending.sessionId === existingActive.id) {
-        await this.ctx.storage.delete("alarm:task");
-        await this.ctx.storage.deleteAlarm();
-      }
+      await this.clearScheduledWork(existingActive.id);
       logger.info("booth_abandoned_session_retired", {
         boothId: ownBoothId,
         sessionId: existingActive.id,
@@ -527,71 +443,37 @@ export class BoothDO extends DurableObject<Bindings> {
     };
   }
 
-  // Ported from apps/cloud/lib/socket/handlers/kiosk.ts START_CAPTURE handler.
-  //
-  // The kiosk asks for EACH photo, not just the first. Pacing belongs to the
-  // kiosk because that is where the human-facing countdown lives: the shutter
-  // has to fire on the same beat as the "CHEESE!" the guest is reading. The DO
-  // used to auto-cascade the next photo the instant the previous upload landed
-  // (see onPhotoUploaded), which on the Sony/UVC driver — where capture() just
-  // grabs the newest in-memory frame — fired all three shots milliseconds
-  // apart while the kiosk was still animating a 3-2-1 that had already been
-  // overtaken. The DO stays the authority on WHICH photo is next; it just no
-  // longer decides WHEN.
+  // PRD bagian 8 #2: `capture:start` sekali per sesi. DO hanya mengubah
+  // `paid` -> `capturing` dan memasang alarm capture_timeout 10 menit.
+  // Tangkapan per foto berjalan kiosk -> agent, tidak lewat DO.
+  // Panggilan ulang untuk sesi yang sudah `capturing` (kiosk reload, tap
+  // ganda) dibalas ok tanpa mereset alarm, supaya batas 10 menit tidak bisa
+  // diperpanjang tanpa akhir.
   private async handleStartCapture(ownBoothId: string, raw: unknown): Promise<HandlerResult> {
     const parsed = startCaptureSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, error: "invalid payload" };
     const { sessionId } = parsed.data;
-    const photoIndex = parsed.data.photoIndex ?? 1;
 
     const db = getDb(this.env.DB);
     const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
     if (!session || session.boothId !== ownBoothId) return { ok: false, error: "session not found" };
 
-    const [booth] = await db.select().from(schema.booths).where(eq(schema.booths.id, ownBoothId)).limit(1);
-    const useMock =
-      ((booth?.metadata as Record<string, unknown> | null)?.use_mock_bridge as boolean | undefined) ?? true;
-
-    // Photos 2 and 3: the session is already running, so validate against the
-    // uploads we have rather than payment status.
-    if (photoIndex > 1) {
-      if (session.status !== "capturing") {
-        return { ok: false, error: `session not capturing (current: ${session.status})` };
-      }
-      // Mock bridge paces itself through alarms — the kiosk's per-photo asks
-      // are redundant there, so acknowledge and drop them.
-      if (useMock) return { ok: true, data: { mockMode: true, ignored: true } };
-
-      const received = new Set<number>((await this.ctx.storage.get<number[]>(photosKey(sessionId))) ?? []);
-      // Already have it: a retry or a re-render asking twice. Acknowledge so
-      // the kiosk doesn't surface an error and tear down a live session.
-      if (received.has(photoIndex)) return { ok: true, data: { mockMode: false, ignored: true } };
-      const expected = received.size + 1;
-      if (photoIndex !== expected) {
-        return { ok: false, error: `out of order photo (expected ${expected}, got ${photoIndex})` };
-      }
-
-      this.pushToBridge(SocketEvents.BRIDGE_CAPTURE, { sessionId, photoIndex });
-      return { ok: true, data: { mockMode: false } };
+    if (session.status === "capturing") {
+      return { ok: true, data: { sessionId, status: "capturing", repeated: true } };
     }
-
     if (session.status !== "paid") {
-      return { ok: false, error: `session not paid (current: ${session.status})` };
+      return { ok: false, code: "INVALID_STATE", error: `session not paid (current: ${session.status})` };
     }
 
     await db.update(schema.sessions).set({ status: "capturing" }).where(eq(schema.sessions.id, sessionId));
-    await this.ctx.storage.put(photosKey(sessionId), [] as number[]);
-
-    if (useMock) {
-      await this.ctx.storage.put<AlarmTask>("alarm:task", { type: "mock_capture", sessionId, index: 1 });
-      await this.ctx.storage.setAlarm(Date.now() + MOCK_BRIDGE.CAPTURE_DELAY_MS);
-    } else {
-      // Real bridge — photo 1. Photos 2 and 3 arrive as their own requests
-      // when the kiosk reaches each CHEESE.
-      this.pushToBridge(SocketEvents.BRIDGE_CAPTURE, { sessionId, photoIndex: 1 });
-    }
-
-    return { ok: true, data: { mockMode: useMock } };
+    await this.scheduleTask({ type: "capture_timeout", sessionId }, Date.now() + SESSION_TIMING.CAPTURE_TIMEOUT_MS);
+    await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
+      boothId: ownBoothId,
+      sessionId,
+      status: "capturing",
+      amount: session.amount,
+    });
+    return { ok: true, data: { sessionId, status: "capturing" } };
   }
 
   private async handleSubmitContact(raw: unknown): Promise<HandlerResult> {
@@ -620,6 +502,9 @@ export class BoothDO extends DurableObject<Bindings> {
     }
   }
 
+  // Kiosk hanya boleh membatalkan sesi yang belum dibayar. Sesi berbayar
+  // dibatalkan lewat staf (`/api/bridge/session/:id/cancel-voucher`) supaya
+  // uang selalu berujung voucher, tidak hilang karena tap "batal".
   private async handleCancel(ownBoothId: string, raw: unknown): Promise<HandlerResult> {
     const parsed = cancelSchema.safeParse(raw ?? {});
     const sessionId = parsed.success ? parsed.data.sessionId : undefined;
@@ -627,71 +512,24 @@ export class BoothDO extends DurableObject<Bindings> {
     if (sessionId) {
       const db = getDb(this.env.DB);
       const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
-      if (session && session.boothId === ownBoothId && session.status !== "done") {
-        await db.update(schema.sessions).set({ status: "expired" }).where(eq(schema.sessions.id, sessionId));
-        await this.clearScheduledWork(sessionId);
-        // Admin dashboard broadcast point (ADMIN_SESSION_UPDATE) — session
-        // expired (cancelled by kiosk).
-        await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
-          boothId: ownBoothId,
-          sessionId,
-          status: "expired",
-          amount: session.amount,
-        });
+      if (session && session.boothId === ownBoothId) {
+        if ((BUSY_SESSION_STATUSES as readonly string[]).includes(session.status)) {
+          return { ok: false, code: "BOOTH_BUSY", error: "Sesi sudah dibayar, panggil barista" };
+        }
+        if (session.status === "payment" || session.status === "idle") {
+          await db.update(schema.sessions).set({ status: "expired" }).where(eq(schema.sessions.id, sessionId));
+          await this.clearScheduledWork(sessionId);
+          await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
+            boothId: ownBoothId,
+            sessionId,
+            status: "expired",
+            amount: session.amount,
+          });
+        }
       }
     }
 
     this.pushToKiosk(SocketEvents.RESET, { sessionId });
-    return { ok: true };
-  }
-
-  // -------------------------------------------------------------------
-  // Bridge handlers
-  // -------------------------------------------------------------------
-
-  private async handleBridgeHello(boothId: string, raw: unknown): Promise<HandlerResult> {
-    logger.info("bridge_hello", { boothId, raw });
-    return { ok: true };
-  }
-
-  // Ported from apps/cloud/lib/socket/handlers/bridge.ts PRINT_COMPLETED.
-  private async handlePrintCompleted(ownBoothId: string, raw: unknown): Promise<HandlerResult> {
-    const parsed = printCompletedSchema.safeParse(raw);
-    if (!parsed.success) return { ok: false, error: "invalid payload" };
-    const { sessionId } = parsed.data;
-
-    const db = getDb(this.env.DB);
-    const [session] = await db
-      .select({ boothId: schema.sessions.boothId, amount: schema.sessions.amount })
-      .from(schema.sessions)
-      .where(eq(schema.sessions.id, sessionId))
-      .limit(1);
-    if (!session || session.boothId !== ownBoothId) return { ok: false, error: "session not found" };
-
-    await db
-      .update(schema.sessions)
-      .set({ status: "done", printCompletedAt: new Date() })
-      .where(eq(schema.sessions.id, sessionId));
-
-    this.pushToKiosk(SocketEvents.PRINT_DONE, { sessionId });
-    await this.clearScheduledWork(sessionId);
-    // Admin dashboard broadcast point (ADMIN_SESSION_UPDATE) — session done
-    // (real-bridge print completed).
-    await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
-      boothId: ownBoothId,
-      sessionId,
-      status: "done",
-      amount: session.amount,
-    });
-    return { ok: true };
-  }
-
-  private async handleBridgeError(boothId: string, raw: unknown): Promise<HandlerResult> {
-    logger.warn("bridge_error", { boothId, payload: raw });
-    this.pushToKiosk(SocketEvents.ERROR, {
-      code: "BRIDGE_ERROR",
-      message: "Hardware booth bermasalah, mohon hubungi operator.",
-    });
     return { ok: true };
   }
 
@@ -716,12 +554,17 @@ export class BoothDO extends DurableObject<Bindings> {
       return false;
     }
 
-    await db.update(schema.sessions).set({ status: "paid", paidAt: new Date() }).where(eq(schema.sessions.id, sessionId));
-    await this.clearScheduledWork(sessionId);
+    const paidAt = new Date();
+    await db.update(schema.sessions).set({ status: "paid", paidAt }).where(eq(schema.sessions.id, sessionId));
+    // PRD bagian 7: `paid` tanpa capture:start 3 menit -> abandoned_paid + voucher.
+    await this.scheduleTask({ type: "paid_timeout", sessionId }, paidAt.getTime() + SESSION_TIMING.PAID_START_TIMEOUT_MS);
+    // PRD bagian 8 #17: downloadToken ikut PAYMENT_PAID (QRIS dan voucher),
+    // jadi QR share bisa tampil tanpa menunggu composite.
     this.pushToKiosk(SocketEvents.PAYMENT_PAID, {
       sessionId,
       amount: session.amount,
-      paidAt: new Date().toISOString(),
+      paidAt: paidAt.toISOString(),
+      downloadToken: session.downloadToken ?? null,
     });
     // Admin dashboard broadcast point (ADMIN_SESSION_UPDATE) — session paid.
     await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
@@ -810,7 +653,10 @@ export class BoothDO extends DurableObject<Bindings> {
       return;
     }
 
-    if (session.status !== "done") {
+    // Status terminal (done, stale, abandoned_paid, ...) tidak ditimpa: sesi
+    // itu sudah punya nasib uang (voucher/cetak). Kiosk tetap dapat RESET.
+    const terminal = (TERMINAL_SESSION_STATUSES as readonly string[]).includes(session.status);
+    if (!terminal) {
       await db.update(schema.sessions).set({ status: "failed" }).where(eq(schema.sessions.id, sessionId));
     }
     await this.clearScheduledWork(sessionId);
@@ -824,7 +670,7 @@ export class BoothDO extends DurableObject<Bindings> {
     await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
       boothId,
       sessionId,
-      status: session.status !== "done" ? "failed" : session.status,
+      status: terminal ? session.status : "failed",
       amount: session.amount,
     });
     logger.info("booth_do_force_reset", { boothId, sessionId, byEmail });
@@ -879,8 +725,10 @@ export class BoothDO extends DurableObject<Bindings> {
     logger.info("booth_do_refund_session", { boothId, sessionId, byEmail: input.byEmail });
   }
 
-  // Real-bridge flow only. Progress (`photosKey`) lives in DO storage, so a
-  // kiosk disconnect/reconnect (or DO eviction) mid-capture never resets it.
+  // PRD bagian 8 #15/#3: unggahan foto hanya menambah baris `photos`.
+  // Progres tangkapan milik agent; status sesi tidak disentuh. Upload bisa
+  // datang jauh setelah sesi `done` (antrean agent), jadi tidak ada cek status.
+  // Idempoten per (sessionId, sortOrder): antrean agent bisa mengulang job.
   async onPhotoUploaded(boothId: string, input: { sessionId: string; index: number; r2Key: string }): Promise<void> {
     const { sessionId, index, r2Key } = input;
     const db = getDb(this.env.DB);
@@ -889,33 +737,7 @@ export class BoothDO extends DurableObject<Bindings> {
       logger.warn("booth_do_photo_uploaded_session_mismatch", { boothId, sessionId });
       return;
     }
-
-    await db.insert(schema.photos).values({ id: crypto.randomUUID(), sessionId, r2Key, isFinal: false, sortOrder: index });
-    await db.update(schema.sessions).set({ photoCount: index, status: "capturing" }).where(eq(schema.sessions.id, sessionId));
-
-    const cdn = getEnv(this.env).PUBLIC_CDN_URL;
-    this.pushToKiosk(SocketEvents.PHOTO_TAKEN, { sessionId, index, url: getPublicUrl(cdn, r2Key) });
-
-    const key = photosKey(sessionId);
-    const received = new Set<number>((await this.ctx.storage.get<number[]>(key)) ?? []);
-    received.add(index);
-    await this.ctx.storage.put(key, Array.from(received));
-
-    // Not done yet: stop here and let the kiosk ask for the next photo when it
-    // reaches that photo's CHEESE (see handleStartCapture). Firing the next
-    // BRIDGE_CAPTURE from here is what made all three shots land in the same
-    // instant on the UVC driver, with the countdown animating over a shutter
-    // that had already gone off. A kiosk that dies mid-session now stalls
-    // instead of blind-capturing and printing a strip nobody is standing for.
-    if (received.size < TOTAL_PHOTOS) return;
-
-    await db.update(schema.sessions).set({ status: "processing" }).where(eq(schema.sessions.id, sessionId));
-    const composite = await this.buildCompositePayload(sessionId);
-    if (!composite) {
-      logger.warn("booth_do_composite_payload_unavailable", { sessionId });
-      return;
-    }
-    this.pushToBridge(SocketEvents.BRIDGE_COMPOSITE, composite);
+    await this.upsertPhoto(sessionId, { r2Key, isFinal: false, sortOrder: index });
   }
 
   async onCompositeUploaded(boothId: string, input: { sessionId: string; r2Key: string }): Promise<void> {
@@ -923,14 +745,143 @@ export class BoothDO extends DurableObject<Bindings> {
     const db = getDb(this.env.DB);
     const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
     if (!session || session.boothId !== boothId) return;
+    await this.upsertPhoto(sessionId, { r2Key, isFinal: true, sortOrder: 99 });
+  }
 
-    await db.insert(schema.photos).values({ id: crypto.randomUUID(), sessionId, r2Key, isFinal: true, sortOrder: 99 });
+  // PRD bagian 8 #16 + bagian 7: satu-satunya jalan ke `done`. Dari
+  // `capturing` (normal) atau `stale` (wifi putus lama lalu pulih).
+  //  - stale + voucher auto-abandoned belum terpakai -> voucher disabled
+  //    (metadata.disabledReason = "late-done"), sesi done.
+  //  - stale + voucher sudah terpakai -> SESSION_STALE (409), status tetap,
+  //    agent tidak mencetak. Pelanggan tidak dapat cetakan dan voucher sekaligus.
+  //  - sudah done -> ok (idempoten; antrean agent bisa mengulang).
+  async markDone(boothId: string, sessionId: string): Promise<MarkDoneResult> {
+    const db = getDb(this.env.DB);
+    const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
+    if (!session || session.boothId !== boothId) return { ok: false, code: "NOT_FOUND" };
+    if (session.status === "done") return { ok: true, status: "done" };
 
-    const cdn = getEnv(this.env).PUBLIC_CDN_URL;
-    const url = getPublicUrl(cdn, r2Key);
-    this.pushToKiosk(SocketEvents.COMPOSITE_READY, { sessionId, url, downloadToken: session.downloadToken ?? "" });
-    this.pushToBridge(SocketEvents.BRIDGE_PRINT, { sessionId, compositeUrl: url });
-    await this.ctx.storage.delete(photosKey(sessionId));
+    let disabledVoucherId: string | undefined;
+    if (session.status === "stale") {
+      const [voucher] = await db
+        .select()
+        .from(schema.vouchers)
+        .where(and(eq(schema.vouchers.sourceSessionId, sessionId), eq(schema.vouchers.source, "auto-abandoned")))
+        .limit(1);
+      if (voucher) {
+        // Kondisional: menang atas redeem yang datang bersamaan. Kalau redeem
+        // sudah menaikkan usedCount, UPDATE ini tidak mengenai baris.
+        const res = await db
+          .update(schema.vouchers)
+          .set({
+            status: "disabled",
+            updatedAt: new Date(),
+            metadata: { ...((voucher.metadata as object | null) ?? {}), disabledReason: "late-done" },
+          })
+          .where(
+            and(
+              eq(schema.vouchers.id, voucher.id),
+              eq(schema.vouchers.usedCount, 0),
+              eq(schema.vouchers.status, "active"),
+            ),
+          );
+        if (res.meta.changes === 0) {
+          logger.warn("booth_do_mark_done_stale_voucher_used", { boothId, sessionId, voucherId: voucher.id });
+          return { ok: false, code: "SESSION_STALE", status: session.status };
+        }
+        disabledVoucherId = voucher.id;
+      }
+    } else if (session.status !== "capturing" && session.status !== "processing") {
+      return { ok: false, code: "INVALID_STATE", status: session.status };
+    }
+
+    await db
+      .update(schema.sessions)
+      .set({ status: "done" })
+      .where(eq(schema.sessions.id, sessionId));
+    await this.clearScheduledWork(sessionId);
+    await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
+      boothId,
+      sessionId,
+      status: "done",
+      amount: session.amount,
+    });
+    logger.info("booth_do_mark_done", { boothId, sessionId, from: session.status, disabledVoucherId });
+
+    // Best-effort; tanpa kontak (WhatsApp di luar scope) ini no-op.
+    try {
+      await notifySession(this.env, sessionId);
+    } catch (err) {
+      logger.warn("booth_do_notify_failed", { sessionId, err: err instanceof Error ? err.message : String(err) });
+    }
+    return disabledVoucherId ? { ok: true, status: "done", disabledVoucherId } : { ok: true, status: "done" };
+  }
+
+  // PRD bagian 6: staf membatalkan sesi berbayar -> `cancelled` + voucher
+  // staff-cancel senilai sesi. Idempoten: panggilan ulang mengembalikan
+  // voucher yang sama (unique index (source_session_id, source)).
+  async cancelWithVoucher(boothId: string, sessionId: string, byStaff?: string): Promise<CancelVoucherResult> {
+    const db = getDb(this.env.DB);
+    const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
+    if (!session || session.boothId !== boothId) return { ok: false, code: "NOT_FOUND" };
+
+    if (session.status !== "cancelled" && !(BUSY_SESSION_STATUSES as readonly string[]).includes(session.status)) {
+      return { ok: false, code: "INVALID_STATE", status: session.status };
+    }
+
+    const voucher = await issueAutoVoucher(db, {
+      sessionId,
+      source: "staff-cancel",
+      amount: session.amount,
+      reason: byStaff ? `staff:${byStaff}` : "staff",
+    });
+    if (session.status !== "cancelled") {
+      await db.update(schema.sessions).set({ status: "cancelled" }).where(eq(schema.sessions.id, sessionId));
+      await this.clearScheduledWork(sessionId);
+      this.pushToKiosk(SocketEvents.RESET, { sessionId, reason: "staff-cancel" });
+      await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
+        boothId,
+        sessionId,
+        status: "cancelled",
+        amount: session.amount,
+      });
+    }
+    logger.info("booth_do_cancel_voucher", { boothId, sessionId, voucherId: voucher.id, created: voucher.created });
+    return { ok: true, voucherId: voucher.id, code: voucher.code, created: voucher.created };
+  }
+
+  // PRD bagian 8 #13: status cetak per lembar disimpan di
+  // `sessions.metadata.print` (tanpa migrasi). Tidak mengubah status sesi.
+  async setPrintStatus(boothId: string, input: PrintStatusInput): Promise<boolean> {
+    const db = getDb(this.env.DB);
+    const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, input.sessionId)).limit(1);
+    if (!session || session.boothId !== boothId) return false;
+
+    const meta = ((session.metadata as Record<string, unknown> | null) ?? {}) as Record<string, unknown>;
+    const print = ((meta.print as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
+    const sheets = { ...((print.sheets as Record<string, unknown> | undefined) ?? {}) };
+    sheets[String(input.sheet)] = {
+      state: input.state,
+      cupsJobId: input.cupsJobId ?? null,
+      error: input.error ?? null,
+      at: new Date().toISOString(),
+    };
+    const states = Object.values(sheets).map((v) => (v as { state: string }).state);
+    const overall = states.includes("failed")
+      ? "failed"
+      : states.length > 0 && states.every((x) => x === "done")
+        ? "done"
+        : "printing";
+    const patch: Partial<typeof schema.sessions.$inferInsert> = {
+      metadata: { ...meta, print: { ...print, sheets, state: overall } },
+    };
+    if (overall === "done" && !session.printCompletedAt) patch.printCompletedAt = new Date();
+    await db.update(schema.sessions).set(patch).where(eq(schema.sessions.id, input.sessionId));
+
+    if (input.state === "failed") {
+      logger.warn("booth_do_print_failed", { boothId, sessionId: input.sessionId, sheet: input.sheet, error: input.error });
+    }
+    return true;
   }
 
   async setContact(boothId: string, input: { sessionId: string; phone: string; email?: string }): Promise<void> {
@@ -957,12 +908,19 @@ export class BoothDO extends DurableObject<Bindings> {
     const [session] = await db
       .select({ id: schema.sessions.id, status: schema.sessions.status })
       .from(schema.sessions)
-      .where(and(eq(schema.sessions.boothId, boothId), sql`${schema.sessions.status} not in ('done','expired','failed')`))
+      .where(and(eq(schema.sessions.boothId, boothId), sql`${schema.sessions.status} not in ${TERMINAL_STATUS_SQL}`))
       .orderBy(desc(schema.sessions.createdAt))
       .limit(1);
 
+    const [booth] = await db
+      .select({ lastSeenAt: schema.booths.lastSeenAt })
+      .from(schema.booths)
+      .where(eq(schema.booths.id, boothId))
+      .limit(1);
+
     return {
-      bridgeOnline: this.ctx.getWebSockets("bridge").length > 0,
+      // "bridge" = booth-agent; online dari heartbeat HTTP terakhir.
+      bridgeOnline: agentOnline(booth?.lastSeenAt ?? null),
       kioskOnline: this.ctx.getWebSockets("kiosk").length > 0,
       currentSessionId: session?.id ?? null,
       status: session?.status ?? null,
@@ -977,26 +935,25 @@ export class BoothDO extends DurableObject<Bindings> {
   async alarm(): Promise<void> {
     const task = await this.ctx.storage.get<AlarmTask>("alarm:task");
     if (!task) return;
+    // Hapus dulu: kalau handler di bawah melempar, runtime mengulang alarm()
+    // dan kita tidak mau loop selamanya. Semua handler idempoten terhadap
+    // status sesi, jadi aman dijalankan ulang secara manual.
+    await this.ctx.storage.delete("alarm:task");
 
     switch (task.type) {
       case "qr_expiry":
         await this.runQrExpiry(task.sessionId);
         break;
-      case "mock_capture":
-        await this.runMockCapture(task.sessionId, task.index);
+      case "paid_timeout":
+        await this.runStageTimeout(task.sessionId, "paid", "abandoned_paid");
         break;
-      case "mock_composite":
-        await this.runMockComposite(task.sessionId);
-        break;
-      case "mock_print":
-        await this.runMockPrint(task.sessionId);
+      case "capture_timeout":
+        await this.runStageTimeout(task.sessionId, "capturing", "stale");
         break;
     }
   }
 
   private async runQrExpiry(sessionId: string): Promise<void> {
-    await this.ctx.storage.delete("alarm:task");
-
     const db = getDb(this.env.DB);
     const [session] = await db
       .select({ boothId: schema.sessions.boothId, status: schema.sessions.status, amount: schema.sessions.amount })
@@ -1007,8 +964,6 @@ export class BoothDO extends DurableObject<Bindings> {
 
     await db.update(schema.sessions).set({ status: "expired" }).where(eq(schema.sessions.id, sessionId));
     this.pushToKiosk(SocketEvents.PAYMENT_EXPIRED, { sessionId });
-    // Admin dashboard broadcast point (ADMIN_SESSION_UPDATE) — session
-    // expired (QR timed out).
     await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
       boothId: session.boothId,
       sessionId,
@@ -1018,92 +973,50 @@ export class BoothDO extends DurableObject<Bindings> {
     logger.info("booth_do_qr_expired", { boothId: session.boothId, sessionId });
   }
 
-  private async runMockCapture(sessionId: string, index: number): Promise<void> {
+  // PRD bagian 7: `paid` 3 menit tanpa capture:start -> abandoned_paid;
+  // `capturing` 10 menit tanpa markDone -> stale. Keduanya menerbitkan
+  // voucher auto-abandoned senilai sesi dan membebaskan booth.
+  // Voucher diterbitkan SEBELUM status diubah: kalau insert gagal, alarm
+  // diulang runtime dan sesi tetap mengunci booth, bukan uang hilang.
+  private async runStageTimeout(
+    sessionId: string,
+    expected: "paid" | "capturing",
+    next: "abandoned_paid" | "stale",
+  ): Promise<void> {
     const db = getDb(this.env.DB);
     const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
-    if (!session || session.status !== "capturing") {
-      await this.ctx.storage.delete("alarm:task");
-      return; // session cancelled/expired mid-chain
-    }
+    if (!session || session.status !== expected) return;
 
-    const boothId = session.boothId;
-    const svg = generatePlaceholderPhotoSvg(index, sessionId);
-    const key = sessionAssetKey(boothId, sessionId, `photo-${index}.svg`);
-    await uploadObject(this.env.BUCKET, { key, body: new TextEncoder().encode(svg), contentType: "image/svg+xml" });
-    await db.insert(schema.photos).values({ id: crypto.randomUUID(), sessionId, r2Key: key, isFinal: false, sortOrder: index });
-    await db.update(schema.sessions).set({ photoCount: index }).where(eq(schema.sessions.id, sessionId));
-
-    const cdn = getEnv(this.env).PUBLIC_CDN_URL;
-    this.pushToKiosk(SocketEvents.PHOTO_TAKEN, { sessionId, index, url: getPublicUrl(cdn, key) });
-
-    if (index < TOTAL_PHOTOS) {
-      await this.ctx.storage.put<AlarmTask>("alarm:task", { type: "mock_capture", sessionId, index: index + 1 });
-      await this.ctx.storage.setAlarm(Date.now() + MOCK_BRIDGE.CAPTURE_DELAY_MS);
-      return;
-    }
-
-    await db.update(schema.sessions).set({ status: "processing" }).where(eq(schema.sessions.id, sessionId));
-    this.pushToKiosk(SocketEvents.STATE_CHANGE, { sessionId, state: "PROCESSING" });
-    await this.ctx.storage.put<AlarmTask>("alarm:task", { type: "mock_composite", sessionId });
-    await this.ctx.storage.setAlarm(Date.now() + MOCK_BRIDGE.COMPOSITE_DELAY_MS);
-  }
-
-  private async runMockComposite(sessionId: string): Promise<void> {
-    const db = getDb(this.env.DB);
-    const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
-    if (!session) {
-      await this.ctx.storage.delete("alarm:task");
-      return;
-    }
-
-    const [booth] = await db.select({ name: schema.booths.name }).from(schema.booths).where(eq(schema.booths.id, session.boothId)).limit(1);
-    const svg = generatePlaceholderCompositeSvg(sessionId, booth?.name ?? "Mote Capture");
-    const key = sessionAssetKey(session.boothId, sessionId, "composite.svg");
-    await uploadObject(this.env.BUCKET, { key, body: new TextEncoder().encode(svg), contentType: "image/svg+xml" });
-    await db.insert(schema.photos).values({ id: crypto.randomUUID(), sessionId, r2Key: key, isFinal: true, sortOrder: 99 });
-
-    const cdn = getEnv(this.env).PUBLIC_CDN_URL;
-    this.pushToKiosk(SocketEvents.COMPOSITE_READY, {
-      sessionId,
-      url: getPublicUrl(cdn, key),
-      downloadToken: session.downloadToken ?? "",
-    });
-
-    await this.ctx.storage.put<AlarmTask>("alarm:task", { type: "mock_print", sessionId });
-    await this.ctx.storage.setAlarm(Date.now() + MOCK_BRIDGE.PRINT_DELAY_MS);
-  }
-
-  private async runMockPrint(sessionId: string): Promise<void> {
-    await this.ctx.storage.delete("alarm:task");
-
-    const db = getDb(this.env.DB);
-    // boothId + amount are only read here for the admin broadcast below —
-    // the actual status transition (next line) doesn't need them.
-    const [session] = await db
-      .select({ boothId: schema.sessions.boothId, amount: schema.sessions.amount })
-      .from(schema.sessions)
-      .where(eq(schema.sessions.id, sessionId))
-      .limit(1);
-    await db.update(schema.sessions).set({ status: "done", printCompletedAt: new Date() }).where(eq(schema.sessions.id, sessionId));
-    this.pushToKiosk(SocketEvents.PRINT_DONE, { sessionId });
-    logger.info("booth_do_mock_print_done", { sessionId });
-
-    if (session) {
-      // Admin dashboard broadcast point (ADMIN_SESSION_UPDATE) — session
-      // done (mock-bridge print completed).
+    const source: AutoVoucherSource = "auto-abandoned";
+    try {
+      const voucher = await issueAutoVoucher(db, {
+        sessionId,
+        source,
+        amount: session.amount,
+        reason: next,
+      });
+      await db
+        .update(schema.sessions)
+        .set({ status: next })
+        .where(and(eq(schema.sessions.id, sessionId), eq(schema.sessions.status, expected)));
+      this.pushToKiosk(SocketEvents.RESET, { sessionId, reason: next });
       await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
         boothId: session.boothId,
         sessionId,
-        status: "done",
+        status: next,
         amount: session.amount,
       });
-    }
-
-    // Best-effort, matches apps/cloud/lib/kiosk/mock-bridge.ts.
-    try {
-      await notifySession(this.env, sessionId);
+      logger.warn("booth_do_stage_timeout", { boothId: session.boothId, sessionId, from: expected, to: next, voucherId: voucher.id });
     } catch (err) {
-      logger.warn("booth_do_mock_notify_failed", { sessionId, err: err instanceof Error ? err.message : String(err) });
+      // Pasang ulang alarm supaya dicoba lagi; booth tetap terkunci.
+      logger.error("booth_do_stage_timeout_failed", {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      await this.scheduleTask(
+        { type: expected === "paid" ? "paid_timeout" : "capture_timeout", sessionId },
+        Date.now() + 30_000,
+      );
     }
   }
 
@@ -1111,13 +1024,41 @@ export class BoothDO extends DurableObject<Bindings> {
   // Shared helpers
   // -------------------------------------------------------------------
 
+  private async scheduleTask(task: AlarmTask, at: number): Promise<void> {
+    await this.ctx.storage.put<AlarmTask>("alarm:task", task);
+    await this.ctx.storage.setAlarm(at);
+  }
+
   private async clearScheduledWork(sessionId: string): Promise<void> {
     const task = await this.ctx.storage.get<AlarmTask>("alarm:task");
     if (task && task.sessionId === sessionId) {
       await this.ctx.storage.delete("alarm:task");
       await this.ctx.storage.deleteAlarm();
     }
-    await this.ctx.storage.delete(photosKey(sessionId));
+  }
+
+  /** Waktu alarm (ms) kalau alarm aktif milik sesi ini, selain itu null. */
+  private async alarmAtFor(sessionId: string): Promise<number | null> {
+    const task = await this.ctx.storage.get<AlarmTask>("alarm:task");
+    if (!task || task.sessionId !== sessionId) return null;
+    return (await this.ctx.storage.getAlarm()) ?? null;
+  }
+
+  private async upsertPhoto(
+    sessionId: string,
+    row: { r2Key: string; isFinal: boolean; sortOrder: number },
+  ): Promise<void> {
+    const db = getDb(this.env.DB);
+    const [existing] = await db
+      .select({ id: schema.photos.id })
+      .from(schema.photos)
+      .where(and(eq(schema.photos.sessionId, sessionId), eq(schema.photos.sortOrder, row.sortOrder)))
+      .limit(1);
+    if (existing) {
+      await db.update(schema.photos).set({ r2Key: row.r2Key, isFinal: row.isFinal }).where(eq(schema.photos.id, existing.id));
+      return;
+    }
+    await db.insert(schema.photos).values({ id: crypto.randomUUID(), sessionId, ...row });
   }
 
   /**
@@ -1137,8 +1078,7 @@ export class BoothDO extends DurableObject<Bindings> {
     const status = row.status as SessionStatus;
     const live = status === "payment" || (BUSY_SESSION_STATUSES as readonly string[]).includes(status);
     if (!live) return null;
-    const task = await this.ctx.storage.get<AlarmTask>("alarm:task");
-    const alarmAt = task && task.sessionId === row.id ? await this.ctx.storage.getAlarm() : null;
+    const alarmAt = await this.alarmAtFor(row.id);
     return {
       id: row.id,
       status,
@@ -1156,59 +1096,8 @@ export class BoothDO extends DurableObject<Bindings> {
       }
     }
   }
+}
 
-  private pushToBridge(ev: string, data: unknown): void {
-    for (const ws of this.ctx.getWebSockets("bridge")) {
-      try {
-        ws.send(encode({ ev, data }));
-      } catch (err) {
-        logger.warn("booth_do_push_bridge_failed", { ev, err: err instanceof Error ? err.message : String(err) });
-      }
-    }
-  }
-
-  // Ported from apps/cloud/lib/socket/handlers/bridge.ts#buildCompositePayload.
-  private async buildCompositePayload(sessionId: string): Promise<
-    | {
-        sessionId: string;
-        frameId?: string;
-        framePngUrl?: string;
-        layoutJson: FrameLayout;
-        photos: Array<{ index: number; url: string }>;
-      }
-    | null
-  > {
-    const db = getDb(this.env.DB);
-    const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
-    if (!session) return null;
-
-    const cdn = getEnv(this.env).PUBLIC_CDN_URL;
-    let frameId: string | undefined;
-    let framePngUrl: string | undefined;
-    let layout: FrameLayout = DEFAULT_LAYOUT_B;
-
-    if (session.frameId) {
-      const [frame] = await db.select().from(schema.frames).where(eq(schema.frames.id, session.frameId)).limit(1);
-      if (frame) {
-        frameId = frame.id;
-        framePngUrl = frame.backgroundKey ? getPublicUrl(cdn, frame.backgroundKey) : undefined;
-        const lj = frame.layoutJson as FrameLayout | null;
-        if (lj && typeof lj === "object" && Array.isArray(lj.photoSlots) && lj.photoSlots.length > 0) {
-          layout = lj;
-        }
-      }
-    }
-
-    const rows = await db
-      .select({ r2Key: schema.photos.r2Key, sortOrder: schema.photos.sortOrder })
-      .from(schema.photos)
-      .where(eq(schema.photos.sessionId, sessionId));
-
-    const photoList = rows
-      .filter((p) => p.sortOrder >= 1 && p.sortOrder <= 3)
-      .map((p) => ({ index: p.sortOrder, url: getPublicUrl(cdn, p.r2Key) }))
-      .sort((a, b) => a.index - b.index);
-
-    return { sessionId, frameId, framePngUrl, layoutJson: layout, photos: photoList };
-  }
+function agentOnline(lastSeenAt: Date | null): boolean {
+  return lastSeenAt !== null && Date.now() - lastSeenAt.getTime() < AGENT_ONLINE_MS;
 }

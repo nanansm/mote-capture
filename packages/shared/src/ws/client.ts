@@ -7,7 +7,7 @@
 // `factory` option; browsers can omit it and fall back to the global
 // `WebSocket`.
 
-import { decode, encode, isPush, isReply, WS_REQUEST_TIMEOUT_MS } from "./envelope";
+import { decode, encode, isPush, isReply, WS_REQUEST_TIMEOUT_MS, WsRequestError } from "./envelope";
 
 /**
  * The minimal surface this client needs from a WebSocket instance. Both the
@@ -162,7 +162,7 @@ export function createWsClient(opts: CreateWsClientOptions): WsClient {
         if (envelope.ok) {
           entry.resolve(envelope.data);
         } else {
-          entry.reject(new Error(envelope.error));
+          entry.reject(new WsRequestError(envelope.error, envelope.code, envelope.details));
         }
         return;
       }

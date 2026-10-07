@@ -58,7 +58,7 @@ app.route("/api/session", sessionAdminRoutes);
 // the request is ever forwarded to BoothDO: the DO trusts that by the time
 // it sees a fetch(), the caller has already been validated. The DO's own
 // fetch() (src/do/booth.ts) parses `boothId` back out of the rewritten
-// pathname (`/kiosk/:boothId` or `/bridge/:boothId`).
+// pathname (`/kiosk/:boothId`).
 // ---------------------------------------------------------------------------
 
 app.get("/ws/kiosk/:boothId", async (c) => {
@@ -84,34 +84,7 @@ app.get("/ws/kiosk/:boothId", async (c) => {
   return stub.fetch(new Request(url, c.req.raw));
 });
 
-app.get("/ws/bridge/:boothId", async (c) => {
-  if ((c.req.header("upgrade") ?? "").toLowerCase() !== "websocket") {
-    return c.text("Expected WebSocket upgrade", 426);
-  }
-  const boothId = c.req.param("boothId");
-
-  // Bearer token ONLY — never a query string (would leak into access logs).
-  const auth = c.req.header("authorization") ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!token) {
-    return c.text("Bridge token diperlukan", 401);
-  }
-
-  const db = getDb(c.env.DB);
-  const [booth] = await db
-    .select({ id: schema.booths.id, bridgeToken: schema.booths.bridgeToken, isActive: schema.booths.isActive })
-    .from(schema.booths)
-    .where(eq(schema.booths.id, boothId))
-    .limit(1);
-  if (!booth || !booth.isActive || booth.bridgeToken !== token) {
-    return c.text("Unauthorized", 401);
-  }
-
-  const stub = c.env.BOOTH_DO.get(c.env.BOOTH_DO.idFromName(boothId));
-  const url = new URL(c.req.url);
-  url.pathname = `/bridge/${boothId}`;
-  return stub.fetch(new Request(url, c.req.raw));
-});
+// /ws/bridge dibuang (PRD bagian 8 #15): booth-agent memakai HTTP /api/bridge/*.
 
 // GET /ws/admin — realtime admin dashboard. AdminDO is a singleton (always
 // `idFromName("overview")`, see src/do/admin.ts + src/do/rpc.ts), so unlike

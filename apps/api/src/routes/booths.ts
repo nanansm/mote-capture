@@ -79,7 +79,7 @@ booths.patch("/:id", async (c) => {
   if (!parsed.success) {
     return c.json({ error: parsed.error.issues[0]?.message ?? "Validasi gagal" }, 400);
   }
-  const { regenerateBridgeToken, useMockBridge, ...rest } = parsed.data;
+  const { regenerateBridgeToken, ...rest } = parsed.data;
   const db = getDb(c.env.DB);
 
   const updates: Partial<typeof schema.booths.$inferInsert> = {
@@ -88,21 +88,6 @@ booths.patch("/:id", async (c) => {
   };
   if (regenerateBridgeToken) {
     updates.bridgeToken = generateBridgeToken();
-  }
-
-  // useMockBridge is stored inside the booth metadata json. We only patch the
-  // single key so other heartbeat-derived fields (camera/printer status) stay.
-  if (typeof useMockBridge === "boolean") {
-    const [existing] = await db
-      .select({ metadata: schema.booths.metadata })
-      .from(schema.booths)
-      .where(eq(schema.booths.id, id))
-      .limit(1);
-    const merged = {
-      ...((existing?.metadata as Record<string, unknown> | null) ?? {}),
-      use_mock_bridge: useMockBridge,
-    };
-    updates.metadata = merged;
   }
 
   const [updated] = await db
@@ -115,7 +100,6 @@ booths.patch("/:id", async (c) => {
   logger.info("booth_updated", {
     id,
     regen: !!regenerateBridgeToken,
-    useMockBridge: typeof useMockBridge === "boolean" ? useMockBridge : undefined,
   });
   return c.json({ data: updated });
 });

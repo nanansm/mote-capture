@@ -79,6 +79,8 @@ export type PaymentPaidPayload = {
   sessionId: string;
   amount: number;
   paidAt: string;
+  /** PRD bagian 8 #17: token share dikirim saat bayar, bukan setelah composite. */
+  downloadToken?: string | null;
 };
 
 export type PaymentExpiredPayload = {

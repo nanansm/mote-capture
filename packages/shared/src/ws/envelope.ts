@@ -37,6 +37,22 @@ export interface WsReplyErr {
   id: number;
   ok: false;
   error: string;
+  /** Kode mesin (mis. BOOTH_BUSY), supaya kiosk tidak mem-parse teks error. */
+  code?: string;
+  /** Detail terstruktur opsional, mis. `{ releasesAt }` untuk BOOTH_BUSY. */
+  details?: Record<string, unknown>;
+}
+
+/** Error dari `request()` yang membawa `code`/`details` balasan server. */
+export class WsRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "WsRequestError";
+  }
 }
 
 /** Server -> client reply to a Request — either success or failure. */

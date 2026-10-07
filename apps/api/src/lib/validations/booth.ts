@@ -22,7 +22,8 @@ export const boothInputSchema = z.object({
 
 export const boothUpdateSchema = boothInputSchema.partial().extend({
   regenerateBridgeToken: z.boolean().optional(),
-  useMockBridge: z.boolean().optional(),
+  // useMockBridge dibuang (PRD bagian 8 #17); field lama dari form admin
+  // dibuang diam-diam oleh zod (strip), tidak error.
 });
 
 export type BoothInputForm = z.infer<typeof boothInputSchema>;

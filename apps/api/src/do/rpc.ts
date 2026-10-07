@@ -16,6 +16,7 @@
 // this task), so the stub is cast to the real class's RPC surface here,
 // locally, instead of widening that shared type.
 import type { AdminDO } from "@/do/admin";
+import type { CancelVoucherResult, MarkDoneResult, PrintStatusInput } from "@/do/booth";
 import type { Bindings } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
@@ -67,6 +68,23 @@ export async function checkRedeemAttempt(
   sessionId: string,
 ): Promise<RedeemAttemptResult> {
   return boothStub(env, boothId).checkRedeemAttempt(boothId, sessionId);
+}
+
+export async function markDone(env: Bindings, boothId: string, sessionId: string): Promise<MarkDoneResult> {
+  return boothStub(env, boothId).markDone(boothId, sessionId);
+}
+
+export async function cancelWithVoucher(
+  env: Bindings,
+  boothId: string,
+  sessionId: string,
+  byStaff?: string,
+): Promise<CancelVoucherResult> {
+  return boothStub(env, boothId).cancelWithVoucher(boothId, sessionId, byStaff);
+}
+
+export async function setPrintStatus(env: Bindings, boothId: string, input: PrintStatusInput): Promise<boolean> {
+  return boothStub(env, boothId).setPrintStatus(boothId, input);
 }
 
 export async function markExpired(
