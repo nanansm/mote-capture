@@ -11,6 +11,8 @@ interface VoucherInputStateProps {
   sessionId?: string;
   onBack: () => void;
   onRedeemed: (sessionId: string) => void;
+  /** Dipanggil tiap kode ditolak (4xx selain 429). */
+  onWrong?: () => void;
   t: T;
   boothId?: string;
 }
@@ -28,6 +30,7 @@ export function VoucherInputState({
   sessionId,
   onBack,
   onRedeemed,
+  onWrong,
   t,
   boothId,
 }: VoucherInputStateProps) {
@@ -76,6 +79,9 @@ export function VoucherInputState({
       if (!res.ok) {
         setError(data.message || t('kiosk.voucher.invalid'));
         setValidating(false);
+        // Kode salah dihitung di mesin state (5x -> KONFIRMASI). 429 rate
+        // limit dan 5xx bukan "salah ketik", jadi tidak ikut dihitung.
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) onWrong?.();
         return;
       }
 
@@ -87,7 +93,7 @@ export function VoucherInputState({
       setError(t('kiosk.voucher.error'));
       setValidating(false);
     }
-  }, [trimmedCode, sessionId, boothId, onRedeemed, t, validating, success]);
+  }, [trimmedCode, sessionId, boothId, onRedeemed, onWrong, t, validating, success]);
 
   // Keyboard support
   useEffect(() => {
@@ -141,11 +147,12 @@ export function VoucherInputState({
   };
 
   return (
-    <div className="min-h-screen bg-brand-cream flex flex-col">
+    <div data-testid="state-voucher" data-session-id={sessionId ?? ''} className="min-h-screen bg-white flex flex-col">
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 shrink-0">
         <button
           type="button"
+          data-testid="voucher-back"
           onClick={onBack}
           disabled={validating || success}
           className="px-5 py-2.5 bg-brand-green-dark text-white rounded-full font-semibold flex items-center gap-2 disabled:opacity-50 hover:bg-brand-green-dark/90 transition"
@@ -189,7 +196,7 @@ export function VoucherInputState({
               should not stomp on a real error message). */}
           <div className="min-h-[56px] mb-4 flex items-center justify-center w-full">
             {error ? (
-              <div className="bg-red-50 border-2 border-red-200 text-red-700 px-5 py-3 rounded-xl flex items-center gap-2">
+              <div data-testid="voucher-error" className="bg-red-50 border-2 border-red-200 text-red-700 px-5 py-3 rounded-xl flex items-center gap-2">
                 <X className="w-5 h-5 shrink-0" />
                 <span className="text-sm font-medium">{error}</span>
               </div>
@@ -209,6 +216,7 @@ export function VoucherInputState({
           {/* Submit Button */}
           <button
             type="button"
+            data-testid="voucher-submit"
             onClick={handleSubmit}
             disabled={!canSubmit}
             className="bg-brand-green-dark hover:bg-brand-green-dark/90 text-brand-yellow font-extrabold text-xl lg:text-2xl px-12 py-4 lg:px-16 lg:py-5 rounded-full shadow-xl transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 w-full"

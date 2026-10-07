@@ -103,12 +103,14 @@ export function KonfirmasiState({
               <MethodButton
                 icon={Ticket}
                 label={t("kiosk.payment.method.voucher")}
+                data-testid="method-voucher"
                 onClick={onChooseVoucher}
                 disabled={busy}
               />
               <MethodButton
                 icon={Smartphone}
                 label={t("kiosk.payment.method.cashless")}
+                data-testid="method-qris"
                 onClick={onChooseCashless}
                 disabled={busy}
               />
@@ -125,15 +127,18 @@ function MethodButton({
   label,
   onClick,
   disabled,
+  "data-testid": testId,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   onClick: () => void;
   disabled: boolean;
+  "data-testid"?: string;
 }) {
   return (
     <button
       type="button"
+      data-testid={testId}
       onClick={onClick}
       disabled={disabled}
       className="group flex aspect-square flex-col items-center justify-center gap-4 rounded-2xl border-2 border-transparent bg-white p-6 shadow-lg transition-all hover:scale-[1.03] hover:border-brand-yellow hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"

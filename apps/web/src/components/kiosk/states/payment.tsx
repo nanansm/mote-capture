@@ -18,7 +18,6 @@ export function PaymentState({
   qrString,
   amount,
   expiresAt,
-  paymentMock,
   onCancel,
   t,
 }: {
@@ -26,7 +25,6 @@ export function PaymentState({
   qrString?: string;
   amount?: number;
   expiresAt?: string;
-  paymentMock: boolean;
   onCancel: () => void;
   t: T;
 }) {
@@ -66,10 +64,11 @@ export function PaymentState({
   }, [remainingMs]);
 
   return (
-    <div className="relative flex h-full w-full flex-col bg-brand-cream">
+    <div data-testid="state-payment" data-session-id={sessionId ?? ""} className="relative flex h-full w-full flex-col bg-white">
       <div className="flex items-center justify-between border-b border-brand-green-dark/10 px-8 py-4">
         <button
           type="button"
+          data-testid="payment-cancel"
           onClick={onCancel}
           className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-brand-green-dark shadow-sm hover:bg-white/80"
         >
@@ -91,6 +90,7 @@ export function PaymentState({
           >
             {qrDataUrl ? (
               <img
+                data-testid="payment-qr"
                 src={qrDataUrl}
                 alt="QRIS"
                 width={420}
@@ -120,14 +120,10 @@ export function PaymentState({
                 {t("kiosk.payment.waiting")}
               </span>
             </div>
-            <div className="rounded-full bg-white px-5 py-3 text-lg font-mono text-brand-green-dark shadow-sm">
+            <div data-testid="payment-timer" className="rounded-full bg-white px-5 py-3 text-lg font-mono text-brand-green-dark shadow-sm">
               {t("kiosk.payment.expires_in", { time: remainingDisplay })}
             </div>
-            {paymentMock ? (
-              <p className="rounded-md bg-brand-yellow/30 px-3 py-2 text-xs font-semibold text-brand-green-dark">
-                ⚠ {t("kiosk.payment.mock")}
-              </p>
-            ) : null}
+
 
             {IS_DEV && sessionId ? <DevMockPayPanel sessionId={sessionId} /> : null}
           </div>

@@ -6,9 +6,11 @@ type T = ReturnType<typeof useTranslation>["t"];
 
 export function PembayaranOkState({
   onStart,
+  busy,
   t,
 }: {
   onStart: () => void;
+  busy: boolean;
   t: T;
 }) {
   return (
@@ -30,11 +32,13 @@ export function PembayaranOkState({
 
         <motion.button
           type="button"
+          data-testid="start-capture"
           onClick={onStart}
+          disabled={busy}
           whileTap={{ scale: 0.97 }}
           animate={{ scale: [1, 1.04, 1] }}
           transition={{ scale: { repeat: Infinity, duration: 2.2, ease: "easeInOut" } }}
-          className="rounded-full bg-brand-green-dark px-16 py-8 shadow-2xl"
+          className="rounded-full bg-brand-green-dark px-16 py-8 shadow-2xl disabled:opacity-60"
         >
           <span className="text-3xl font-extrabold tracking-[0.12em] text-brand-yellow">
             {t("kiosk.paid.start_capture")}

@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft } from "lucide-react";
-import type { KioskBootData } from "@capture/shared";
+import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { KIOSK_TIMING, type KioskBootData } from "@capture/shared";
 import { displayUrl } from "@/lib/storage/r2-client";
 import { formatRupiah, cn } from "@/lib/utils";
 import type { useTranslation } from "@/lib/i18n/use-translation";
@@ -19,8 +20,14 @@ export function PilihFrameState({
   onBack: () => void;
   t: T;
 }) {
+  // PRD bagian 5: 4 frame per halaman, prev/next, tanpa batas jumlah frame.
+  const per = KIOSK_TIMING.FRAMES_PER_PAGE;
+  const totalPages = Math.max(1, Math.ceil(frames.length / per));
+  const [page, setPage] = useState(0);
+  const safePage = Math.min(page, totalPages - 1);
+  const visible = frames.slice(safePage * per, safePage * per + per);
   return (
-    <div className="relative flex h-full w-full flex-col bg-brand-cream">
+    <div data-testid="state-pilih-frame" className="relative flex h-full w-full flex-col bg-white">
       <div className="flex items-center justify-between border-b border-brand-green-dark/10 px-8 py-4">
         <button
           type="button"
@@ -42,10 +49,12 @@ export function PilihFrameState({
             <p className="text-lg text-brand-green-dark/60">{t("kiosk.frame.empty")}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {frames.map((f, idx) => (
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            {visible.map((f, idx) => (
               <motion.button
                 key={f.id}
+                data-testid="frame-option"
+                data-frame-id={f.id}
                 type="button"
                 onClick={() => onPick(f)}
                 whileTap={{ scale: 0.96 }}
@@ -63,7 +72,7 @@ export function PilihFrameState({
                     matches the aspect, image inside uses object-contain with
                     inner padding so branding ("MAJA PHOTOBOOTH") is never
                     cropped at any breakpoint. */}
-                <div className="relative aspect-[3/2] w-full bg-brand-cream/60">
+                <div className="relative aspect-[2/3] max-h-[34vh] w-full bg-brand-cream/60">
                   <div className="absolute inset-2 sm:inset-3">
                     {f.previewUrl ? (
                       <img
@@ -98,10 +107,33 @@ export function PilihFrameState({
         )}
       </div>
 
-      <div className="border-t border-brand-green-dark/10 bg-white/70 px-8 py-3 text-center text-sm font-semibold text-brand-green-dark/70">
-        {t("kiosk.frame.regular")} {formatRupiah(30000)}{"  ·  "}
-        {t("kiosk.frame.premium")} {formatRupiah(40000)}
-      </div>
+      {totalPages > 1 ? (
+        <div className="flex items-center justify-center gap-6 border-t border-brand-green-dark/10 px-8 py-3">
+          <button
+            type="button"
+            data-testid="frame-prev"
+            disabled={safePage === 0}
+            onClick={() => setPage(safePage - 1)}
+            className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-3 text-base font-semibold text-brand-green-dark shadow disabled:opacity-40"
+          >
+            <ChevronLeft className="h-5 w-5" />
+            {t("kiosk.frame.prev")}
+          </button>
+          <span data-testid="frame-page" className="text-base font-semibold text-brand-green-dark/80">
+            {t("kiosk.frame.page", { n: safePage + 1, total: totalPages })}
+          </span>
+          <button
+            type="button"
+            data-testid="frame-next"
+            disabled={safePage >= totalPages - 1}
+            onClick={() => setPage(safePage + 1)}
+            className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-3 text-base font-semibold text-brand-green-dark shadow disabled:opacity-40"
+          >
+            {t("kiosk.frame.next")}
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

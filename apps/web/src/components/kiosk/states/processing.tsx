@@ -16,10 +16,10 @@ export function ProcessingState({
   // captured photo if we have it, otherwise show a spinner placeholder. This
   // also avoids the broken-image icon that appears when an empty string slips
   // through as a src.
-  const slots = [0, 1, 2].map((i) => photos[i] ?? "");
+  const slots = [0, 1, 2, 3].map((i) => photos[i] ?? "");
 
   return (
-    <div className="relative flex h-full w-full flex-col items-center justify-center bg-brand-cream px-8">
+    <div data-testid="state-processing" className="relative flex h-full w-full flex-col items-center justify-center bg-brand-cream px-8">
       <div className="flex flex-col items-center gap-10 text-center">
         <h2 className="text-4xl font-extrabold text-brand-green-dark">
           {t("kiosk.processing.title")}
@@ -31,13 +31,13 @@ export function ProcessingState({
             <motion.div
               key={i}
               initial={{ opacity: 0, y: 30, rotate: 0 }}
-              animate={{ opacity: 1, y: 0, rotate: i === 0 ? -3 : i === 2 ? 3 : 0 }}
+              animate={{ opacity: 1, y: 0, rotate: i === 0 ? -3 : i === 3 ? 3 : 0 }}
               transition={{ delay: i * 0.25, type: "spring", stiffness: 120 }}
               className="flex h-44 w-32 items-center justify-center overflow-hidden rounded-xl border-4 border-white bg-muted shadow-xl"
             >
               {url ? (
                 <img
-                  src={displayUrl(url)}
+                  src={url.startsWith("/") ? url : displayUrl(url)}
                   alt={`Photo ${i + 1}`}
                   className="h-full w-full object-cover"
                 />

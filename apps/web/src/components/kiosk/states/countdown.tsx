@@ -1,69 +1,43 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { KIOSK_TIMING } from "@capture/shared";
 import type { CountdownPhase } from "@/lib/kiosk/state-machine";
+import { agent } from "@/lib/kiosk/agent";
 import type { useTranslation } from "@/lib/i18n/use-translation";
 
 type T = ReturnType<typeof useTranslation>["t"];
-
-// Bridge runs locally on the booth Mini PC and exposes a /live-preview proxy.
-// VITE_BRIDGE_URL lets us point a remote test rig at a different host;
-// default matches the bridge's hard-coded port (see local-server.ts).
-const BRIDGE_URL =
-  (import.meta.env.VITE_BRIDGE_URL as string | undefined)?.replace(/\/$/, "") ??
-  "http://localhost:9876";
 
 export function CountdownState({
   step,
   number,
   phase,
   flashing,
+  retaking,
   t,
 }: {
-  step: 1 | 2 | 3;
+  step: number;
   number: number;
   phase: CountdownPhase;
   flashing: boolean;
+  retaking: boolean;
   t: T;
 }) {
-  const [previewSrc, setPreviewSrc] = useState<string>("");
+  // Live view = satu stream MJPEG dari agent (PRD bagian 9), bukan polling
+  // JPEG. Stream putus: sembunyikan <img>, countdown tetap jalan (shutter
+  // tidak bergantung pada preview).
   const [previewOk, setPreviewOk] = useState<boolean>(true);
-  const failsRef = useRef(0);
-
-  // Poll the bridge's live-view proxy. Cache-bust with a timestamp so the
-  // browser doesn't serve a stale frame. After a few consecutive load
-  // failures we drop the <img> and fall back to the dashed-frame placeholder
-  // (camera disconnected, bridge offline, etc.) — better than a flickering
-  // broken-image icon over the countdown text.
-  useEffect(() => {
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      setPreviewSrc(`${BRIDGE_URL}/live-preview?t=${Date.now()}`);
-    };
-    tick();
-    const id = window.setInterval(tick, KIOSK_TIMING.LIVE_PREVIEW_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, []);
+  const total = KIOSK_TIMING.PHOTO_COUNT;
 
   return (
-    <div className="relative flex h-full w-full flex-col bg-brand-green-dark text-brand-yellow">
-      {previewOk && previewSrc ? (
+    <div data-testid="state-countdown" data-slot={step} data-phase={phase} className="relative flex h-full w-full flex-col bg-brand-green-dark text-brand-yellow">
+      {previewOk ? (
         <img
-          src={previewSrc}
+          data-testid="live-preview"
+          src={agent.previewUrl()}
           alt=""
           aria-hidden
           className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-90"
-          onLoad={() => {
-            failsRef.current = 0;
-          }}
-          onError={() => {
-            failsRef.current += 1;
-            if (failsRef.current >= 5) setPreviewOk(false);
-          }}
+          onError={() => setPreviewOk(false)}
         />
       ) : null}
       {/* Darken the preview so the yellow countdown text stays legible */}
@@ -71,7 +45,7 @@ export function CountdownState({
 
       <div className="relative z-10 px-8 py-4 text-center">
         <p className="text-xl font-bold uppercase tracking-[0.2em] drop-shadow">
-          {t("kiosk.countdown.step", { n: step })}
+          {retaking ? t("kiosk.countdown.retake", { n: step }) : t("kiosk.countdown.photo", { n: step, total })}
         </p>
       </div>
 
@@ -92,7 +66,7 @@ export function CountdownState({
                 {t("kiosk.countdown.get_ready")}
               </div>
               <div className="mt-4 text-2xl font-semibold text-brand-yellow/85">
-                {t("kiosk.countdown.step", { n: step })}
+                {t("kiosk.countdown.photo", { n: step, total })}
               </div>
             </motion.div>
           ) : phase === "COUNTDOWN" ? (
@@ -109,20 +83,21 @@ export function CountdownState({
           ) : (
             <motion.div
               key="cheese"
+              data-testid="countdown-hold"
               initial={{ scale: 0.6, opacity: 0 }}
               animate={{ scale: [1, 1.08, 1], opacity: 1 }}
               exit={{ scale: 1.4, opacity: 0 }}
               transition={{ duration: 0.5, ease: "easeOut" }}
               className="text-[20vw] font-black leading-none drop-shadow-2xl"
             >
-              {t("kiosk.countdown.cheese")}
+              {t("kiosk.countdown.hold")}
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
       <div className="relative z-10 flex items-center justify-center gap-3 pb-8">
-        {[1, 2, 3].map((i) => (
+        {Array.from({ length: total }, (_, k) => k + 1).map((i) => (
           <span
             key={i}
             className={

@@ -77,7 +77,8 @@ export type KioskEvent =
   | { type: "CALL_STAFF"; reason: CallStaffReason; message?: string }
   | {
       type: "RESUME";
-      to: "PEMBAYARAN_OK" | "COUNTDOWN" | "REVIEW_SHOT" | "PROCESSING" | "DONE";
+      to: "PEMBAYARAN_OK" | "COUNTDOWN" | "REVIEW_SHOT" | "PROCESSING" | "DONE" | "CALL_STAFF";
+      reason?: CallStaffReason;
       sessionId: string;
       downloadToken: string | null;
       slot?: PhotoSlot;
@@ -152,6 +153,7 @@ export function reducer(m: KioskMachine, ev: KioskEvent): KioskMachine {
           retakeUsed: ev.retakeUsed ?? Array(PHOTO_COUNT).fill(false),
           countdownPhase: "COUNTDOWN",
           countdown: Math.round(KIOSK_TIMING.COUNTDOWN_PER_PHOTO_MS / 1000),
+          callStaffReason: ev.to === "CALL_STAFF" ? (ev.reason ?? "RECOVERY_FAILED") : null,
         },
       };
     case "TIMEOUT":
@@ -206,6 +208,11 @@ export function reducer(m: KioskMachine, ev: KioskEvent): KioskMachine {
       return m;
 
     case "PEMBAYARAN_OK":
+      // Voucher: callback redeem bisa tiba sebelum push PAYMENT_PAID yang
+      // membawa downloadToken. Push yang belakangan cukup melengkapi token.
+      if (ev.type === "PAYMENT_PAID" && ev.sessionId === ctx.sessionId && ev.downloadToken) {
+        return go("PEMBAYARAN_OK", { downloadToken: ev.downloadToken });
+      }
       if (ev.type === "CAPTURE_STARTED") {
         return go("COUNTDOWN", {
           slot: 1,

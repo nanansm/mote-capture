@@ -7,17 +7,24 @@ type T = ReturnType<typeof useTranslation>["t"];
 export function IdleState({
   defaultPrice,
   onStart,
+  blocked,
+  lowSupply,
   t,
 }: {
   defaultPrice: number;
   onStart: () => void;
+  /** Kamera diketahui mati: uang tidak boleh masuk (PRD bagian 5). */
+  blocked: boolean;
+  lowSupply: boolean;
   t: T;
 }) {
   return (
     <button
       type="button"
-      onClick={onStart}
-      className="relative flex h-full w-full cursor-pointer items-center justify-center overflow-hidden bg-gradient-to-br from-brand-yellow via-brand-cream to-brand-pink/40 text-left focus:outline-none"
+      data-testid="idle-start"
+      onClick={blocked ? undefined : onStart}
+      aria-disabled={blocked}
+      className=""relative flex h-full w-full cursor-pointer items-center justify-center overflow-hidden bg-gradient-to-br from-brand-yellow via-brand-cream to-brand-pink/40 text-left focus:outline-none"
     >
       <motion.div
         className="pointer-events-none absolute -top-32 -left-32 h-[26rem] w-[26rem] blob-yellow"
@@ -51,17 +58,32 @@ export function IdleState({
           </p>
         </div>
 
-        <motion.div
-          animate={{ scale: [1, 1.03, 1] }}
-          transition={{ repeat: Infinity, duration: 2.4, ease: "easeInOut" }}
-          className="rounded-full bg-brand-green-dark px-16 py-8 shadow-2xl"
-        >
-          <span className="text-4xl font-extrabold tracking-[0.15em] text-brand-yellow">
-            {t("kiosk.idle.start_button")}
-          </span>
-        </motion.div>
-
-        <p className="text-sm text-brand-green-dark/60">{t("kiosk.idle.tap_anywhere")}</p>
+        {blocked ? (
+          <div
+            data-testid="idle-blocked"
+            className="rounded-full bg-white px-12 py-6 text-2xl font-bold text-brand-green-dark shadow-xl"
+          >
+            {t("kiosk.idle.preparing")}
+          </div>
+        ) : (
+          <>
+            <motion.div
+              animate={{ scale: [1, 1.03, 1] }}
+              transition={{ repeat: Infinity, duration: 2.4, ease: "easeInOut" }}
+              className="rounded-full bg-brand-green-dark px-16 py-8 shadow-2xl"
+            >
+              <span className="text-4xl font-extrabold tracking-[0.15em] text-brand-yellow">
+                {t("kiosk.idle.start_button")}
+              </span>
+            </motion.div>
+            <p className="text-sm text-brand-green-dark/60">{t("kiosk.idle.tap_anywhere")}</p>
+          </>
+        )}
+        {lowSupply ? (
+          <p data-testid="idle-low-supply" className="text-sm font-semibold text-brand-orange">
+            {t("kiosk.idle.low_supply")}
+          </p>
+        ) : null}
       </div>
     </button>
   );
