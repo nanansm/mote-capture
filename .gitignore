@@ -61,3 +61,4 @@ apps/bridge/installer/assets/installer-small.bmp
 # Playwright
 test-results*/
 playwright-report*/
+deploy/minipc/out/

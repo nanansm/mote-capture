@@ -1,0 +1,4 @@
+# Kamera Canon (vendor 04a9) + printer SELPHY: boleh diakses user booth tanpa root.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04a9", MODE="0660", GROUP="plugdev"
+# Matikan autosuspend USB untuk perangkat Canon (kamera/printer "hilang" setelah idle).
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="04a9", TEST=="power/control", ATTR{power/control}="on"

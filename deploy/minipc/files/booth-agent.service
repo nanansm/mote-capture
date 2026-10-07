@@ -1,0 +1,32 @@
+[Unit]
+Description=Mote Capture booth-agent (kamera, cetak, antrean upload)
+After=network-online.target cups.service
+Wants=network-online.target cups.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=booth
+Group=booth
+EnvironmentFile=/etc/booth-agent/env
+WorkingDirectory=/opt/booth-agent/current
+ExecStart=/opt/node/bin/node /opt/booth-agent/current/dist/main.js
+Restart=always
+RestartSec=2
+# SIGTERM: agent menunggu kerja latar + menutup SQLite dengan rapi.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+# Batas memori: cegah satu bug memakan seluruh RAM mini PC.
+MemoryMax=1500M
+# Hardening: agent hanya boleh menulis ke data dir.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/booth-agent
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+SupplementaryGroups=plugdev lpadmin
+
+[Install]
+WantedBy=multi-user.target

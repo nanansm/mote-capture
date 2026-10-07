@@ -1,4 +1,6 @@
 // Entry booth-agent: rakit driver + DB + server, tangani SIGTERM dengan rapi.
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { loadConfig, type AgentConfig } from "./config.js";
 import { openDb, closeDb } from "./db.js";
 import { createLogger } from "./log.js";
@@ -48,10 +50,23 @@ export async function startAgent(cfg: AgentConfig, opts: { silent?: boolean } = 
   return { app, agent, hub, frames, db, close };
 }
 
-const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;
-if (isMain) {
+// realpath: di mini PC agent dijalankan lewat symlink /opt/booth-agent/current, sedangkan
+// import.meta.url berisi path asli. Tanpa realpath agent keluar diam-diam (exit 0) tanpa listen.
+function isEntry(): boolean {
+  const arg = process.argv[1];
+  if (!arg) return false;
+  try {
+    return fs.realpathSync(arg) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (isEntry()) {
   const cfg = loadConfig();
-  const h = await startAgent(cfg);
+  const h = await startAgent(cfg).catch((err: unknown) => {
+    console.error(JSON.stringify({ t: new Date().toISOString(), level: "error", msg: "agent_start_failed", error: err instanceof Error ? err.message : String(err) }));
+    process.exit(1);
+  });
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.on(sig, () => {
       void h.close().finally(() => process.exit(0));
