@@ -6,6 +6,7 @@ const BOOTH = "BOOTH-E2E";
 const VOUCHER_FULL = "E2EFULL1";
 const AGENT = "http://127.0.0.1:9877";
 const API = "http://127.0.0.1:8790";
+const BRIDGE_TOKEN = "e2e-bridge-token";
 
 const kiosk = (page: Page) => page.getByTestId("kiosk");
 const expectState = (page: Page, state: string, timeout = 15_000) =>
@@ -13,6 +14,12 @@ const expectState = (page: Page, state: string, timeout = 15_000) =>
 
 async function resetRig(request: APIRequestContext) {
   await request.post(`${AGENT}/__mock/reset`);
+}
+
+async function openKioskAny(page: Page) {
+  await page.goto(`/kiosk/${BOOTH}`);
+  await expect(kiosk(page)).toBeVisible({ timeout: 30_000 });
+  await expectState(page, "IDLE", 30_000);
 }
 
 async function openKiosk(page: Page) {
@@ -65,6 +72,24 @@ test.beforeEach(async ({ request }) => {
   await resetRig(request);
 });
 
+// Isolasi antar test: satu booth = satu DO. Sesi yang masih hidup (paid/
+// capturing) akan di-resume test berikutnya (perilaku produk yang benar),
+// jadi pensiunkan lewat bridge asli. 409 = sudah terminal, abaikan.
+test.afterEach(async ({ page, request }) => {
+  const sid = await page.getByTestId("kiosk").getAttribute("data-session-id").catch(() => null);
+  if (sid) {
+    await request.post(`${API}/api/bridge/session/${sid}/cancel-voucher`, {
+      headers: { authorization: `Bearer ${BRIDGE_TOKEN}` },
+      data: { staff: "e2e-cleanup" },
+    });
+  }
+});
+
+/** Ketik lewat numpad layar (kiosk sentuh, tanpa keyboard fisik). */
+async function tapCode(page: Page, code: string) {
+  for (const ch of code) await page.getByRole("button", { name: ch, exact: true }).click();
+}
+
 test("QRIS happy path: frame, bayar, 4 foto + 1 retake, compose, done", async ({ page, request }) => {
   await openKiosk(page);
   await pickFrame(page);
@@ -93,13 +118,14 @@ test("voucher: 1 kode salah dihitung, kode full-cover lolos ke PEMBAYARAN_OK", a
   await expectState(page, "VOUCHER_INPUT");
   await sessionIdOf(page);
 
-  await page.keyboard.type("SALAH99");
+  await tapCode(page, "SALAH99");
+  await expect(page.getByTestId("voucher-submit")).toBeEnabled();
   await page.getByTestId("voucher-submit").click();
   await expect(page.getByTestId("voucher-error")).toBeVisible();
   await expectState(page, "VOUCHER_INPUT");
 
-  await page.keyboard.press("Escape");
-  await page.keyboard.type(VOUCHER_FULL);
+  await page.getByRole("button", { name: "Hapus Semua" }).click();
+  await tapCode(page, VOUCHER_FULL);
   await page.getByTestId("voucher-submit").click();
   await expectState(page, "PEMBAYARAN_OK", 15_000);
 });
@@ -141,25 +167,18 @@ test("staf batalkan sesi berbayar: voucher pengganti terbit, kiosk kembali IDLE"
   await expectState(page, "IDLE");
 });
 
-test("tab kedua di booth sibuk: BOOTH_BUSY, tidak bisa curi sesi", async ({ page, browser, request }) => {
-  await openKiosk(page);
+test("reload kiosk saat sesi berbayar: lanjut sesi yang sama, foto tetap jalan", async ({ page, request }) => {
+  await openKioskAny(page);
   await pickFrame(page);
-  await payQris(page, request);
+  const sid = await payQris(page, request);
 
-  const ctx2 = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
-  const p2 = await ctx2.newPage();
-  await p2.goto(`/kiosk/${BOOTH}`);
-  // Tab kedua melihat sesi aktif -> tidak boleh mulai sesi baru.
-  await expect(p2.getByTestId("kiosk")).toHaveAttribute("data-state", /BOOTH_BUSY|IDLE/, { timeout: 30_000 });
-  if ((await p2.getByTestId("kiosk").getAttribute("data-state")) === "IDLE") {
-    await pickFrame(p2);
-    await p2.getByTestId("method-qris").click();
-    await expect(p2.getByTestId("kiosk")).toHaveAttribute("data-state", "BOOTH_BUSY", { timeout: 15_000 });
-  }
-  await expect(p2.getByTestId("busy-time")).toBeVisible();
-  await ctx2.close();
-  // Tab pertama tidak terganggu.
-  await expectState(page, "PEMBAYARAN_OK");
+  // Chromium crash / reload: snapshot DO harus mengembalikan sesi berbayar.
+  await page.reload();
+  await expectState(page, "PEMBAYARAN_OK", 30_000);
+  expect(await kiosk(page).getAttribute("data-session-id")).toBe(sid);
+
+  await page.getByTestId("start-capture").click();
+  await expect(page.getByTestId("state-review")).toHaveAttribute("data-slot", "1", { timeout: 30_000 });
 });
 
 test("QR kedaluwarsa tanpa bayar: kembali ke IDLE", async ({ page }) => {
