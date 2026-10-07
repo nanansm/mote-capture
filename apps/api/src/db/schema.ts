@@ -189,6 +189,9 @@ export const vouchers = sqliteTable(
     batchId: text("batch_id"),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
     createdBy: text("created_by"),
+    // 0002: asal voucher (PRD bagian 6). Lihat VOUCHER_SOURCES di @capture/shared.
+    source: text("source").notNull().default("manual"),
+    sourceSessionId: text("source_session_id"),
     metadata: text("metadata", { mode: "json" }).default(sql`'{}'`),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(now),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(now),
@@ -197,6 +200,8 @@ export const vouchers = sqliteTable(
     codeIdx: index("vouchers_code_idx").on(table.code),
     statusIdx: index("vouchers_status_idx").on(table.status),
     batchIdx: index("vouchers_batch_idx").on(table.batchId),
+    sourceIdx: index("vouchers_source_idx").on(table.source),
+    sourceSessionIdx: index("vouchers_source_session_idx").on(table.sourceSessionId),
   }),
 );
 
