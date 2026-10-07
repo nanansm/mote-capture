@@ -198,3 +198,34 @@ test("QR kedaluwarsa tanpa bayar: kembali ke IDLE", async ({ page }) => {
   await expect(kiosk(page)).not.toHaveAttribute("data-state", "PAYMENT", { timeout: 75_000 });
   await expectState(page, "IDLE", 10_000);
 });
+
+test("booth sedang dipakai: layar kedua kena BOOTH_BUSY, tombol Oke kembali ke IDLE", async ({ page, browser, request }) => {
+  // Layar kedua sudah di KONFIRMASI sebelum layar pertama bayar (mis. tab/Chromium
+  // kedua tertinggal di booth yang sama). Server wajib menolak sesi baru selama sesi
+  // berbayar masih hidup, dan tidak boleh memensiunkan sesi yang uangnya sudah masuk.
+  const ctx2 = await browser.newContext();
+  const page2 = await ctx2.newPage();
+  try {
+    await openKioskAny(page);
+    await openKioskAny(page2);
+    await pickFrame(page2);
+
+    await pickFrame(page);
+    const sid = await payQris(page, request);
+
+    await page2.getByTestId("method-qris").click();
+    await expectState(page2, "BOOTH_BUSY");
+    await expect(page2.getByTestId("busy-time")).toContainText(/\d{2}[.:]\d{2}/);
+
+    // Sesi berbayar di layar pertama tetap utuh dan bisa lanjut foto.
+    await expectState(page, "PEMBAYARAN_OK");
+    expect(await kiosk(page).getAttribute("data-session-id")).toBe(sid);
+    await page.getByTestId("start-capture").click();
+    await expect(page.getByTestId("state-review")).toHaveAttribute("data-slot", "1", { timeout: 30_000 });
+
+    await page2.getByTestId("busy-ok").click();
+    await expectState(page2, "IDLE");
+  } finally {
+    await ctx2.close();
+  }
+});
