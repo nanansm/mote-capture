@@ -21,8 +21,11 @@ export type AgentEventType = AgentEvent["type"];
 /** `GET /health` agent -> `activeSession` (pemulihan kiosk, PRD bagian 5). */
 export type AgentActiveSession = {
   id: string;
+  /** Slot pertama yang belum punya foto (1..4). */
   nextSlot: PhotoSlot;
   retakeUsed: boolean[];
+  /** `thumbUrl` per slot (panjang 4, `null` = belum ada foto). */
+  thumbs: (string | null)[];
   phase: "capturing" | "reviewing" | "composing" | "finished";
 };
 
@@ -36,3 +39,36 @@ export type PrintStatusReport = {
 
 /** Penghitung opsional di heartbeat agent. */
 export type AgentCounters = { paper: number; ink: number };
+
+/** `GET /health` agent (PRD bagian 9). */
+export type AgentHealth = {
+  camera: { connected: boolean; model: string | null; lastError: string | null };
+  printer: { state: "idle" | "printing" | "stopped" | "unknown"; reason?: string | null };
+  queue: { pending: number; failed: number };
+  counters: { paper: number; ink: number; lowPaper: boolean; lowInk: boolean };
+  activeSession: AgentActiveSession | null;
+};
+
+/** `POST /staff/login` agent. 401 membawa sisa percobaan, 423 membawa batas kunci. */
+export type StaffLoginOk = { token: string; expiresAt: string };
+export type StaffLoginErr = { error: "WRONG_PIN"; attemptsLeft: number } | { error: "LOCKED"; lockedUntil: string };
+
+/** Header token halaman staf untuk semua `/staff/*` selain login. */
+export const STAFF_TOKEN_HEADER = "x-staff-token";
+
+/** `POST /staff/camera-reset` -> hasil `gphoto2 --summary` setelah usbreset. */
+export type StaffCameraResetOk = { ok: boolean; camera: AgentHealth["camera"] };
+
+/** `POST /staff/cancel-voucher` body + balasan (kode voucher staff-cancel). */
+export type StaffCancelVoucherBody = { sessionId: string };
+export type StaffCancelVoucherOk = { code: string; voucherId: string };
+
+/** `POST /staff/counters`: tambah kertas dan/atau set tinta. */
+export type StaffCountersBody = { paperAdd?: number; inkSet?: number };
+export type StaffCountersOk = AgentHealth["counters"];
+
+/** `GET /staff/sessions`: 20 sesi terakhir untuk cetak ulang per lembar. */
+export type StaffRecentSession = { id: string; compositeUrl: string; createdAt: string };
+
+/** `POST /print/reprint` (butuh token staf). */
+export type ReprintBody = { sessionId: string; sheet: 1 | 2 };

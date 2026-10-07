@@ -250,7 +250,11 @@ export class BoothDO extends DurableObject<Bindings> {
               ok: false,
               error: result.error,
               ...(result.code ? { code: result.code } : {}),
-              ...(result.releasesAt !== undefined ? { releasesAt: result.releasesAt } : {}),
+              // `releasesAt` top-level dipertahankan untuk klien lama; klien
+              // shared (`WsRequestError.details`) membaca dari `details`.
+              ...(result.releasesAt !== undefined
+                ? { releasesAt: result.releasesAt, details: { releasesAt: result.releasesAt } }
+                : {}),
             }),
       );
     }

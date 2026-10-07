@@ -16,7 +16,7 @@ export const KIOSK_TIMING = {
   // Compose saja; cetak tidak ditunggu di layar.
   PROCESSING_TIMEOUT_MS: 20_000,
   // REVIEW_SHOT auto-maju ke foto berikutnya.
-  PREVIEW_AUTO_ADVANCE_MS: 5000,
+  REVIEW_SHOT_MS: 5000,
   DONE_AUTO_RESET_MS: 60_000, // waktu scan QR share
   // Tanpa `photo.ready` dari agent selama ini -> CALL_STAFF.
   CAPTURE_WAIT_MS: 15_000,
@@ -25,16 +25,16 @@ export const KIOSK_TIMING = {
   AGENT_WS_GRACE_MS: 10_000,
   // Kode voucher salah sebanyak ini -> kembali ke KONFIRMASI.
   VOUCHER_MAX_WRONG: 5,
-
-  // --- Deprecated: hanya dipakai UI kiosk lama, dihapus saat M2. ---
-  /** @deprecated diganti event agent `shutter_fired`. */
-  CHEESE_HOLD_MS: 1200,
-  /** @deprecated diganti state REVIEW_SHOT. */
-  POST_CAPTURE_HOLD_MS: 800,
-  /** @deprecated preview memakai `<img src="/preview.mjpeg">` dari agent. */
-  LIVE_PREVIEW_POLL_MS: 150,
-  /** @deprecated INPUT_KONTAK dihapus (tanpa WhatsApp). */
-  CONTACT_TIMEOUT_MS: 60_000,
+  // `capture:start` ditolak DO (sesi sudah abandoned_paid): pesan tampil
+  // selama ini lalu IDLE (PRD bagian 5 langkah 1).
+  CAPTURE_REJECTED_NOTICE_MS: 10_000,
+  // Halaman staf: 5 sentuhan pojok kiri atas dalam 3 detik (PRD bagian 6).
+  STAFF_TAP_COUNT: 5,
+  STAFF_TAP_WINDOW_MS: 3000,
+  STAFF_PIN_LENGTH: 4,
+  // Halaman staf tanpa sentuhan -> keluar (token agent sendiri 10 menit).
+  STAFF_IDLE_MS: 2 * 60 * 1000,
+  FRAMES_PER_PAGE: 4,
 } as const;
 
 // Alarm BoothDO per tahap (PRD bagian 7). Satu alarm per DO.
@@ -52,11 +52,4 @@ export const REDEEM_LIMITS = {
   PER_SESSION: 5,
   PER_BOOTH: 30,
   WINDOW_MS: 10 * 60 * 1000,
-} as const;
-
-/** @deprecated jalur mock bridge dibuang di M1 langkah 7. */
-export const MOCK_BRIDGE = {
-  CAPTURE_DELAY_MS: 8000,
-  COMPOSITE_DELAY_MS: 3000,
-  PRINT_DELAY_MS: 5000,
 } as const;

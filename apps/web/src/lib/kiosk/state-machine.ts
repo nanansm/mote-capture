@@ -1,297 +1,273 @@
-import type { Frame } from "@capture/shared";
+// Mesin state kiosk M2 (PRD bagian 5). Murni: tidak ada I/O, tidak ada timer.
+// Semua efek (ws DO, HTTP agent, timer) hidup di kiosk-shell.tsx dan masuk ke
+// sini sebagai event. Dengan begitu tiap transisi bisa diuji tanpa browser.
+import { KIOSK_TIMING, type KioskBootData, type PhotoSlot } from "@capture/shared";
 
 export type KioskState =
   | "IDLE"
   | "PILIH_FRAME"
   | "KONFIRMASI"
-  | "VOUCHER_INPUT"
   | "PAYMENT"
+  | "VOUCHER_INPUT"
   | "PEMBAYARAN_OK"
   | "COUNTDOWN"
+  | "REVIEW_SHOT"
   | "PROCESSING"
-  | "PREVIEW"
-  | "INPUT_KONTAK"
-  | "DONE";
+  | "DONE"
+  | "CALL_STAFF"
+  | "BOOTH_BUSY";
 
-export type PaymentMethod = "cashless" | "voucher";
+export type PaymentMethod = "qris" | "voucher";
 
-export type CountdownPhase = "GET_READY" | "COUNTDOWN" | "CHEESE";
+/** GET_READY hanya sebelum foto 1; HOLD = "TAHAN!" sampai `shutter_fired`. */
+export type CountdownPhase = "GET_READY" | "COUNTDOWN" | "HOLD";
+
+export type FrameOption = KioskBootData["frames"][number];
+
+export type CallStaffReason =
+  | "CAMERA_OFFLINE"
+  | "CAPTURE_TIMEOUT"
+  | "PHOTO_FAILED"
+  | "COMPOSE_FAILED"
+  | "COMPOSE_TIMEOUT"
+  | "AGENT_OFFLINE"
+  | "RECOVERY_FAILED"
+  | "ERROR";
 
 export type KioskContext = {
-  boothId: string;
-  boothName: string;
-  defaultPrice: number;
-  sessionId?: string;
-  selectedFrame?: Pick<Frame, "id" | "name" | "tier" | "price" | "previewUrl" | "backgroundUrl">;
-  amount?: number;
-  qrString?: string;
-  paymentExpiresAt?: string;
-  paymentMethod?: PaymentMethod;
-  capturedPhotoUrls: string[];
-  countdownStep: 1 | 2 | 3;
-  countdownNumber: number;
+  selectedFrame: FrameOption | null;
+  method: PaymentMethod | null;
+  sessionId: string | null;
+  downloadToken: string | null;
+  qrString: string | null;
+  amount: number | null;
+  expiresAt: string | null;
+  /** Slot yang sedang/akan difoto (1..4). */
+  slot: PhotoSlot;
   countdownPhase: CountdownPhase;
-  compositeUrl?: string;
-  downloadToken?: string;
-  customerPhone?: string;
-  customerEmail?: string;
-  errorMessage?: string;
-  language: "id" | "en";
-  mockMode: boolean;
-  // Kept separate from `mockMode`: that flag reflects the physical bridge/camera
-  // connection (per-booth, survives across sessions), while this one reflects
-  // whether the server's Xendit QR is a real payment or a stub (per-session,
-  // sourced only from PAYMENT_QR) — conflating them made a real QRIS payment
-  // show the "mock payment" banner just because the booth ran bridgeless.
-  paymentMock: boolean;
-  bridgeOnline: boolean;
+  countdown: number;
+  /** thumbUrl per slot, indeks 0..3. */
+  thumbs: (string | null)[];
+  retakeUsed: boolean[];
+  /** true saat sedang mengulang slot (tanpa fase GET_READY). */
+  retaking: boolean;
+  compositeUrl: string | null;
+  callStaffReason: CallStaffReason | null;
+  errorMessage: string | null;
+  busyReleasesAt: string | null;
+  voucherWrong: number;
 };
 
 export type KioskEvent =
   | { type: "TAP_START" }
-  | { type: "FRAME_PICKED"; frame: KioskContext["selectedFrame"] }
-  | { type: "CONFIRM_PAY" }
-  | { type: "CHOOSE_CASHLESS" }
-  | { type: "CHOOSE_VOUCHER" }
-  | { type: "VOUCHER_REDEEMED"; sessionId: string }
+  | { type: "FRAME_PICKED"; frame: FrameOption }
+  | { type: "CHOOSE_METHOD"; method: PaymentMethod }
+  | { type: "SESSION_CREATED"; sessionId: string; qrString: string | null; amount: number; expiresAt: string }
+  | { type: "BOOTH_BUSY"; releasesAt: string | null }
+  | { type: "VOUCHER_WRONG" }
+  | { type: "PAYMENT_PAID"; sessionId: string; downloadToken: string | null }
+  | { type: "PAYMENT_EXPIRED"; sessionId?: string }
+  | { type: "CAPTURE_STARTED" }
+  | { type: "COUNTDOWN_PHASE"; phase: CountdownPhase; value: number }
+  | { type: "SHUTTER_FIRED"; sessionId: string; slot: PhotoSlot }
+  | { type: "PHOTO_READY"; sessionId: string; slot: PhotoSlot; thumbUrl: string; retakeUsed: boolean }
+  | { type: "RETAKE" }
+  | { type: "REVIEW_DONE" }
+  | { type: "COMPOSE_DONE"; sessionId: string; compositeUrl: string }
+  | { type: "CALL_STAFF"; reason: CallStaffReason; message?: string }
+  | {
+      type: "RESUME";
+      to: "PEMBAYARAN_OK" | "COUNTDOWN" | "REVIEW_SHOT" | "PROCESSING" | "DONE";
+      sessionId: string;
+      downloadToken: string | null;
+      slot?: PhotoSlot;
+      thumbs?: (string | null)[];
+      retakeUsed?: boolean[];
+    }
   | { type: "BACK" }
-  | { type: "PAYMENT_QR"; sessionId: string; qrString: string; amount: number; expiresAt: string; mockMode: boolean }
-  | { type: "PAYMENT_PAID"; sessionId: string }
-  | { type: "PAYMENT_EXPIRED" }
-  | { type: "TAP_MULAI_FOTO" }
-  | { type: "ENTER_COUNTDOWN" }
-  | { type: "COUNTDOWN_TICK"; value: number }
-  | { type: "COUNTDOWN_PHASE"; phase: CountdownPhase }
-  | { type: "PHOTO_TAKEN"; url: string; index: number }
-  | { type: "ENTER_PROCESSING" }
-  | { type: "COMPOSITE_READY"; url: string; downloadToken: string }
-  | { type: "PREVIEW_DONE" }
-  | { type: "CONTACT_SUBMITTED"; phone: string; email?: string }
   | { type: "TIMEOUT"; from: KioskState }
-  | { type: "CANCEL" }
-  | { type: "RESET" }
-  | { type: "ERROR"; message: string }
-  | { type: "SET_LANGUAGE"; language: "id" | "en" }
-  | { type: "SET_BRIDGE_STATUS"; online: boolean; mockMode: boolean };
+  | { type: "RESET" };
 
-export type KioskMachine = {
-  state: KioskState;
-  context: KioskContext;
-};
+export type KioskMachine = { state: KioskState; context: KioskContext };
 
-export function initialMachine(opts: {
-  boothId: string;
-  boothName: string;
-  defaultPrice: number;
-  language: "id" | "en";
-  mockMode: boolean;
-  bridgeOnline: boolean;
-}): KioskMachine {
+const PHOTO_COUNT = KIOSK_TIMING.PHOTO_COUNT;
+
+function emptyContext(): KioskContext {
   return {
-    state: "IDLE",
-    context: {
-      boothId: opts.boothId,
-      boothName: opts.boothName,
-      defaultPrice: opts.defaultPrice,
-      capturedPhotoUrls: [],
-      countdownStep: 1,
-      countdownNumber: 3,
-      countdownPhase: "GET_READY",
-      language: opts.language,
-      mockMode: opts.mockMode,
-      paymentMock: false,
-      bridgeOnline: opts.bridgeOnline,
-    },
+    selectedFrame: null,
+    method: null,
+    sessionId: null,
+    downloadToken: null,
+    qrString: null,
+    amount: null,
+    expiresAt: null,
+    slot: 1,
+    countdownPhase: "GET_READY",
+    countdown: 0,
+    thumbs: Array(PHOTO_COUNT).fill(null),
+    retakeUsed: Array(PHOTO_COUNT).fill(false),
+    retaking: false,
+    compositeUrl: null,
+    callStaffReason: null,
+    errorMessage: null,
+    busyReleasesAt: null,
+    voucherWrong: 0,
   };
 }
 
-export function reducer(machine: KioskMachine, event: KioskEvent): KioskMachine {
-  const { state, context } = machine;
+export function initialMachine(): KioskMachine {
+  return { state: "IDLE", context: emptyContext() };
+}
 
-  switch (event.type) {
-    case "SET_LANGUAGE":
-      return { state, context: { ...context, language: event.language } };
-    case "SET_BRIDGE_STATUS":
-      return {
-        state,
-        context: { ...context, bridgeOnline: event.online, mockMode: event.mockMode },
-      };
-    case "ERROR":
-      return { state: "IDLE", context: { ...resetContext(context), errorMessage: event.message } };
+const idle = (): KioskMachine => initialMachine();
+
+/** Event milik sesi lain (sisa sesi lama / tab lain) diabaikan. */
+function foreign(ctx: KioskContext, sessionId: string | undefined): boolean {
+  return !!sessionId && !!ctx.sessionId && sessionId !== ctx.sessionId;
+}
+
+export function reducer(m: KioskMachine, ev: KioskEvent): KioskMachine {
+  const { state, context: ctx } = m;
+  const go = (s: KioskState, patch: Partial<KioskContext> = {}): KioskMachine => ({
+    state: s,
+    context: { ...ctx, ...patch },
+  });
+
+  // Global.
+  switch (ev.type) {
     case "RESET":
-    case "CANCEL":
-    case "PAYMENT_EXPIRED":
+      return idle();
+    case "CALL_STAFF":
+      if (state === "IDLE" || state === "DONE") return m;
+      return go("CALL_STAFF", { callStaffReason: ev.reason, errorMessage: ev.message ?? null });
+    case "RESUME":
+      return {
+        state: ev.to,
+        context: {
+          ...emptyContext(),
+          sessionId: ev.sessionId,
+          downloadToken: ev.downloadToken,
+          slot: ev.slot ?? 1,
+          thumbs: ev.thumbs ?? Array(PHOTO_COUNT).fill(null),
+          retakeUsed: ev.retakeUsed ?? Array(PHOTO_COUNT).fill(false),
+          countdownPhase: "COUNTDOWN",
+          countdown: Math.round(KIOSK_TIMING.COUNTDOWN_PER_PHOTO_MS / 1000),
+        },
+      };
     case "TIMEOUT":
-      return { state: "IDLE", context: resetContext(context) };
+      // Timer yang terlambat dari state sebelumnya tidak boleh memindah state.
+      if (ev.from !== state) return m;
+      if (state === "PROCESSING") return go("CALL_STAFF", { callStaffReason: "COMPOSE_TIMEOUT" });
+      if (state === "COUNTDOWN") return go("CALL_STAFF", { callStaffReason: "CAPTURE_TIMEOUT" });
+      if (state === "REVIEW_SHOT") return reducer(m, { type: "REVIEW_DONE" });
+      return idle();
+    default:
+      break;
   }
 
   switch (state) {
     case "IDLE":
-      if (event.type === "TAP_START") {
-        return { state: "PILIH_FRAME", context: { ...resetContext(context), errorMessage: undefined } };
-      }
-      break;
-    case "PILIH_FRAME":
-      if (event.type === "FRAME_PICKED") {
-        return {
-          state: "KONFIRMASI",
-          context: {
-            ...context,
-            selectedFrame: event.frame,
-            amount: event.frame?.price ?? context.defaultPrice,
-          },
-        };
-      }
-      if (event.type === "BACK") return { state: "IDLE", context: resetContext(context) };
-      break;
-    case "KONFIRMASI":
-      if (event.type === "CHOOSE_CASHLESS" || event.type === "CONFIRM_PAY") {
-        return { state: "PAYMENT", context: { ...context, paymentMethod: "cashless" } };
-      }
-      if (event.type === "CHOOSE_VOUCHER") {
-        return { state: "VOUCHER_INPUT", context: { ...context, paymentMethod: "voucher" } };
-      }
-      if (event.type === "BACK") return { state: "PILIH_FRAME", context };
-      break;
-    case "VOUCHER_INPUT":
-      if (event.type === "VOUCHER_REDEEMED" || event.type === "PAYMENT_PAID") {
-        return {
-          state: "PEMBAYARAN_OK",
-          context: { ...context, sessionId: event.sessionId },
-        };
-      }
-      // Same QR-arrival side-effect as PAYMENT — keeps sessionId/amount fresh
-      // even though the voucher path ignores qrString.
-      if (event.type === "PAYMENT_QR") {
-        return {
-          state,
-          context: {
-            ...context,
-            sessionId: event.sessionId,
-            qrString: event.qrString,
-            amount: event.amount,
-            paymentExpiresAt: event.expiresAt,
-            paymentMock: event.mockMode,
-          },
-        };
-      }
-      if (event.type === "BACK") return { state: "KONFIRMASI", context };
-      break;
-    case "PAYMENT":
-      if (event.type === "PAYMENT_QR") {
-        return {
-          state,
-          context: {
-            ...context,
-            sessionId: event.sessionId,
-            qrString: event.qrString,
-            amount: event.amount,
-            paymentExpiresAt: event.expiresAt,
-            paymentMock: event.mockMode,
-          },
-        };
-      }
-      if (event.type === "PAYMENT_PAID") {
-        return {
-          state: "PEMBAYARAN_OK",
-          context: { ...context, sessionId: event.sessionId },
-        };
-      }
-      break;
-    case "PEMBAYARAN_OK":
-      if (event.type === "TAP_MULAI_FOTO" || event.type === "ENTER_COUNTDOWN") {
-        return {
-          state: "COUNTDOWN",
-          context: {
-            ...context,
-            countdownStep: 1,
-            countdownNumber: 3,
-            countdownPhase: "GET_READY",
-          },
-        };
-      }
-      break;
-    case "COUNTDOWN":
-      if (event.type === "COUNTDOWN_TICK") {
-        return { state, context: { ...context, countdownNumber: event.value } };
-      }
-      if (event.type === "COUNTDOWN_PHASE") {
-        return { state, context: { ...context, countdownPhase: event.phase } };
-      }
-      if (event.type === "PHOTO_TAKEN") {
-        const next = [...context.capturedPhotoUrls];
-        next[event.index - 1] = event.url;
-        if (event.index >= 3) {
-          return {
-            state: "PROCESSING",
-            context: { ...context, capturedPhotoUrls: next, countdownNumber: 3 },
-          };
-        }
-        const nextStep = ((event.index + 1) as 1 | 2 | 3);
-        return {
-          state,
-          context: {
-            ...context,
-            capturedPhotoUrls: next,
-            countdownStep: nextStep,
-            countdownNumber: 3,
-            // Photos 2 & 3 skip GET_READY — straight into the 3-2-1 cadence.
-            countdownPhase: "COUNTDOWN",
-          },
-        };
-      }
-      if (event.type === "ENTER_PROCESSING") {
-        return { state: "PROCESSING", context };
-      }
-      break;
-    case "PROCESSING":
-      if (event.type === "COMPOSITE_READY") {
-        return {
-          state: "PREVIEW",
-          context: {
-            ...context,
-            compositeUrl: event.url,
-            downloadToken: event.downloadToken,
-          },
-        };
-      }
-      break;
-    case "PREVIEW":
-      if (event.type === "PREVIEW_DONE") return { state: "INPUT_KONTAK", context };
-      break;
-    case "INPUT_KONTAK":
-      if (event.type === "CONTACT_SUBMITTED") {
-        return {
-          state: "DONE",
-          context: { ...context, customerPhone: event.phone, customerEmail: event.email },
-        };
-      }
-      if (event.type === "PREVIEW_DONE") {
-        return { state: "DONE", context };
-      }
-      break;
-    case "DONE":
-      // any reset event handled above
-      break;
-  }
-  return machine;
-}
+      if (ev.type === "TAP_START") return go("PILIH_FRAME");
+      return m;
 
-function resetContext(context: KioskContext): KioskContext {
-  return {
-    boothId: context.boothId,
-    boothName: context.boothName,
-    defaultPrice: context.defaultPrice,
-    capturedPhotoUrls: [],
-    countdownStep: 1,
-    countdownNumber: 3,
-    countdownPhase: "GET_READY",
-    language: context.language,
-    mockMode: context.mockMode,
-    // Per-session flag: a finished session must not leak its "was this a mock
-    // payment" flag into the next customer's session.
-    paymentMock: false,
-    bridgeOnline: context.bridgeOnline,
-    errorMessage: undefined,
-  };
+    case "PILIH_FRAME":
+      if (ev.type === "FRAME_PICKED") return go("KONFIRMASI", { selectedFrame: ev.frame });
+      if (ev.type === "BACK") return idle();
+      return m;
+
+    case "KONFIRMASI":
+      if (ev.type === "CHOOSE_METHOD") return go(ev.method === "qris" ? "PAYMENT" : "VOUCHER_INPUT", { method: ev.method, sessionId: null, qrString: null });
+      if (ev.type === "BACK") return go("PILIH_FRAME", { selectedFrame: null, voucherWrong: 0 });
+      if (ev.type === "BOOTH_BUSY") return go("BOOTH_BUSY", { busyReleasesAt: ev.releasesAt });
+      return m;
+
+    case "PAYMENT":
+    case "VOUCHER_INPUT":
+      if (ev.type === "SESSION_CREATED") {
+        return go(state, { sessionId: ev.sessionId, qrString: ev.qrString, amount: ev.amount, expiresAt: ev.expiresAt });
+      }
+      if (ev.type === "BOOTH_BUSY") return go("BOOTH_BUSY", { busyReleasesAt: ev.releasesAt });
+      if (ev.type === "PAYMENT_PAID") {
+        if (foreign(ctx, ev.sessionId)) return m;
+        return go("PEMBAYARAN_OK", { sessionId: ev.sessionId, downloadToken: ev.downloadToken });
+      }
+      if (ev.type === "PAYMENT_EXPIRED") {
+        if (foreign(ctx, ev.sessionId)) return m;
+        return idle();
+      }
+      if (ev.type === "VOUCHER_WRONG" && state === "VOUCHER_INPUT") {
+        const n = ctx.voucherWrong + 1;
+        if (n >= KIOSK_TIMING.VOUCHER_MAX_WRONG) {
+          return go("KONFIRMASI", { voucherWrong: 0, sessionId: null, method: null });
+        }
+        return go(state, { voucherWrong: n });
+      }
+      if (ev.type === "BACK") return go("KONFIRMASI", { sessionId: null, qrString: null, method: null });
+      return m;
+
+    case "PEMBAYARAN_OK":
+      if (ev.type === "CAPTURE_STARTED") {
+        return go("COUNTDOWN", {
+          slot: 1,
+          retaking: false,
+          countdownPhase: "GET_READY",
+          countdown: Math.round(KIOSK_TIMING.GET_READY_MS / 1000),
+        });
+      }
+      return m;
+
+    case "COUNTDOWN":
+      if (ev.type === "COUNTDOWN_PHASE") return go("COUNTDOWN", { countdownPhase: ev.phase, countdown: ev.value });
+      if (ev.type === "SHUTTER_FIRED") {
+        if (foreign(ctx, ev.sessionId) || ev.slot !== ctx.slot) return m;
+        return go("COUNTDOWN", { countdownPhase: "HOLD", countdown: 0 });
+      }
+      if (ev.type === "PHOTO_READY") {
+        if (foreign(ctx, ev.sessionId) || ev.slot !== ctx.slot) return m;
+        const thumbs = [...ctx.thumbs];
+        thumbs[ev.slot - 1] = ev.thumbUrl;
+        const retakeUsed = [...ctx.retakeUsed];
+        retakeUsed[ev.slot - 1] = ev.retakeUsed || retakeUsed[ev.slot - 1]!;
+        return go("REVIEW_SHOT", { thumbs, retakeUsed, retaking: false });
+      }
+      return m;
+
+    case "REVIEW_SHOT":
+      if (ev.type === "RETAKE") {
+        if (ctx.retakeUsed[ctx.slot - 1]) return m; // 1× per slot
+        const retakeUsed = [...ctx.retakeUsed];
+        retakeUsed[ctx.slot - 1] = true;
+        return go("COUNTDOWN", {
+          retakeUsed,
+          retaking: true,
+          countdownPhase: "COUNTDOWN",
+          countdown: Math.round(KIOSK_TIMING.COUNTDOWN_PER_PHOTO_MS / 1000),
+        });
+      }
+      if (ev.type === "REVIEW_DONE") {
+        if (ctx.slot >= PHOTO_COUNT) return go("PROCESSING", { retaking: false });
+        return go("COUNTDOWN", {
+          slot: (ctx.slot + 1) as PhotoSlot,
+          retaking: false,
+          countdownPhase: "COUNTDOWN",
+          countdown: Math.round(KIOSK_TIMING.COUNTDOWN_PER_PHOTO_MS / 1000),
+        });
+      }
+      return m;
+
+    case "PROCESSING":
+      if (ev.type === "COMPOSE_DONE") {
+        if (foreign(ctx, ev.sessionId)) return m;
+        return go("DONE", { compositeUrl: ev.compositeUrl });
+      }
+      return m;
+
+    case "CALL_STAFF":
+      // Setelah staf reset kamera, shell mengirim RESUME. Selain itu tetap.
+      return m;
+
+    case "BOOTH_BUSY":
+    case "DONE":
+      return m;
+  }
 }
