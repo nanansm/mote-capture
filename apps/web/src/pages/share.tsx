@@ -21,6 +21,8 @@ import { ApiError, get } from "@/lib/api";
 // every photo URL client-side and zips them in the browser with `fflate`.
 type PhotoDto = { id: string; url: string; isFinal: boolean; sortOrder: number };
 type ShareData = {
+  /** "uploading" = sesi selesai, composite masih di antrean upload booth. */
+  state?: "ready" | "uploading";
   session: { id: string; boothName: string; downloadExpiresAt: string | null };
   photos: PhotoDto[];
 };
@@ -30,6 +32,7 @@ type LoadState =
   | { kind: "not_found" }
   | { kind: "expired"; downloadExpiresAt: string | null }
   | { kind: "not_ready" }
+  | { kind: "uploading" }
   | { kind: "error"; message: string }
   | { kind: "ready"; data: ShareData };
 
@@ -76,12 +79,16 @@ export default function SharePage() {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [zipping, setZipping] = useState(false);
 
+  // Naik tiap kali polling "uploading"/"not_ready" perlu cek ulang.
+  const [attempt, setAttempt] = useState(0);
+
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
     get<ShareData>(`/share/${token}`)
       .then((data) => {
-        if (!cancelled) setState({ kind: "ready", data });
+        if (cancelled) return;
+        setState(data.state === "uploading" ? { kind: "uploading" } : { kind: "ready", data });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -105,7 +112,16 @@ export default function SharePage() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, attempt]);
+
+  // Foto masih di antrean upload booth: cek ulang tiap 10 detik, maksimal
+  // 30× (5 menit) supaya tab yang ditinggal tidak polling selamanya.
+  useEffect(() => {
+    if (state.kind !== "uploading" && state.kind !== "not_ready") return;
+    if (attempt >= 30) return;
+    const t = setTimeout(() => setAttempt((n) => n + 1), 10_000);
+    return () => clearTimeout(t);
+  }, [state.kind, attempt]);
 
   async function handleDownloadAll(data: ShareData) {
     setZipping(true);
@@ -177,6 +193,18 @@ export default function SharePage() {
           emoji="⏳"
           title="Foto belum siap"
           description="Foto kamu masih diproses. Coba refresh halaman ini sebentar lagi."
+        />
+      </Layout>
+    );
+  }
+
+  if (state.kind === "uploading") {
+    return (
+      <Layout>
+        <StateCard
+          emoji="⏳"
+          title="Foto sedang diunggah"
+          description="Sesi kamu sudah selesai. Foto sedang dikirim dari booth, halaman ini akan memuat ulang otomatis."
         />
       </Layout>
     );

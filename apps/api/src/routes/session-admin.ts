@@ -18,6 +18,7 @@
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { REFUND_REASONS } from "@capture/shared";
 import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import type { AdminVariables } from "@/middleware/admin";
@@ -58,12 +59,14 @@ sessionAdmin.post("/:id/reset", async (c) => {
 });
 
 const refundBodySchema = z.object({
+  reasonCode: z.enum(REFUND_REASONS).default("MANUAL"),
   reason: z.string().min(1).max(500),
 });
 
-// ADMIN-ONLY — manual refund. Sprint 2 behavior carried over as-is: records
-// the intent and marks the session 'failed'; no real provider refund call
-// yet (ported from apps/cloud/app/api/session/[id]/refund/route.ts).
+// ADMIN-ONLY — refund manual (PRD bagian 8 #7). Tanpa panggilan refund Xendit;
+// uang dikembalikan tunai/voucher di kasir, di sini hanya dicatat.
+// Sesi `done` boleh: status tetap `done`, link share tetap hidup.
+// Sekali per sesi: klik ganda -> 409, bukan dua baris refund.
 sessionAdmin.post("/:id/refund", async (c) => {
   const adminEmail = c.get("adminEmail");
   const id = c.req.param("id");
@@ -72,7 +75,7 @@ sessionAdmin.post("/:id/refund", async (c) => {
   try {
     json = await c.req.json();
   } catch {
-    // empty body — falls through to zod validation below
+    // body kosong -> divalidasi zod di bawah
   }
   const parsed = refundBodySchema.safeParse(json);
   if (!parsed.success) {
@@ -80,32 +83,36 @@ sessionAdmin.post("/:id/refund", async (c) => {
   }
 
   const db = getDb(c.env.DB);
-  const [session] = await db
-    .select()
-    .from(schema.sessions)
-    .where(eq(schema.sessions.id, id))
-    .limit(1);
+  const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, id)).limit(1);
   if (!session) {
     return c.json({ error: "Session tidak ditemukan" }, 404);
   }
-  if (session.status !== "paid" && session.status !== "capturing" && session.status !== "processing") {
+
+  const result = await refundSession(c.env, session.boothId, id, {
+    reasonCode: parsed.data.reasonCode,
+    reason: parsed.data.reason,
+    byEmail: adminEmail,
+  });
+  if (!result.ok) {
+    if (result.code === "ALREADY_REFUNDED") {
+      return c.json({ error: "Sesi ini sudah pernah direfund", code: result.code }, 409);
+    }
+    if (result.code === "NOT_FOUND") return c.json({ error: "Session tidak ditemukan" }, 404);
     return c.json(
-      { error: `Refund hanya bisa untuk sesi yang sudah dibayar (status sekarang: ${session.status})` },
+      { error: `Refund hanya untuk sesi yang sudah dibayar (status sekarang: ${result.status ?? session.status})`, code: result.code },
       400,
     );
   }
-
-  await refundSession(c.env, session.boothId, id, { reason: parsed.data.reason, byEmail: adminEmail });
 
   await db.insert(schema.paymentLogs).values({
     sessionId: id,
     provider: session.paymentProvider ?? "unknown",
     eventType: "refund_manual",
-    payload: { reason: parsed.data.reason, by: adminEmail },
+    payload: { reasonCode: parsed.data.reasonCode, reason: parsed.data.reason, by: adminEmail, fromStatus: session.status, amount: session.amount },
   });
 
-  logger.info("session_refunded", { sessionId: id, by: adminEmail });
-  return c.json({ ok: true });
+  logger.info("session_refunded", { sessionId: id, by: adminEmail, reasonCode: parsed.data.reasonCode });
+  return c.json({ ok: true, status: result.status });
 });
 
 export default sessionAdmin;

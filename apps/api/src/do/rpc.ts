@@ -16,7 +16,8 @@
 // this task), so the stub is cast to the real class's RPC surface here,
 // locally, instead of widening that shared type.
 import type { AdminDO } from "@/do/admin";
-import type { CancelVoucherResult, MarkDoneResult, PrintStatusInput } from "@/do/booth";
+import type { CancelVoucherResult, MarkDoneResult, PrintStatusInput, RefundInput, RefundResult } from "@/do/booth";
+export type { RefundInput, RefundResult };
 import type { Bindings } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
@@ -110,10 +111,6 @@ export async function forceReset(
   await boothStub(env, boothId).forceReset(boothId, sessionId, byEmail);
 }
 
-export type RefundInput = {
-  reason: string;
-  byEmail: string;
-};
 
 // T2.10: admin manual-refund action (src/routes/session-admin.ts). Ported
 // from apps/cloud/app/api/session/[id]/refund/route.ts, which wrote
@@ -125,8 +122,8 @@ export async function refundSession(
   boothId: string,
   sessionId: string,
   input: RefundInput,
-): Promise<void> {
-  await boothStub(env, boothId).refundSession(boothId, sessionId, input);
+): Promise<RefundResult> {
+  return boothStub(env, boothId).refundSession(boothId, sessionId, input);
 }
 
 export async function onPhotoUploaded(

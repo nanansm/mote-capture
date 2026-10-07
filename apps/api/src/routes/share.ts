@@ -16,6 +16,7 @@
 //      unknown token          -> 404
 //      downloadExpiresAt past -> 410
 //      status !== "done"      -> 425
+//      done, composite belum  -> 200 { state: "uploading" } (PRD bagian 8 #10)
 //  - Photo URLs: apps/cloud/app/share/[token]/page.tsx:139/151 called
 //    `displayUrl(p.url)` because the old `photos.url` column held a full
 //    (possibly-mock) URL already. The new `photos.r2Key` column
@@ -77,7 +78,13 @@ share.get("/:token", async (c) => {
     .where(eq(schema.photos.sessionId, session.id))
     .orderBy(schema.photos.sortOrder);
 
+  // PRD bagian 8 #10: `done` tapi composite belum sampai R2 (antrean upload
+  // agent) -> 200 + state "uploading". Baris `photos` baru ditulis setelah
+  // PUT ke R2 sukses, jadi ada baris isFinal = composite sudah di R2.
+  const state = photos.some((p) => p.isFinal) ? "ready" : "uploading";
+
   return c.json({
+    state,
     session: {
       id: session.id,
       boothName: booth?.name ?? "Maja Photobooth",

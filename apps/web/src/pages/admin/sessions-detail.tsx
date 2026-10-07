@@ -169,6 +169,7 @@ export default function SessionsDetailPage() {
         shareUrl={data.shareUrl ?? ""}
         initialPhone={data.customerPhone}
         initialEmail={data.customerEmail}
+        refunded={data.paymentLogs.some((l) => l.eventType === "refund_manual")}
         onUpdated={refetch}
       />
 

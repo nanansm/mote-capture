@@ -6,6 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { REFUND_REASONS, type RefundReason } from "@capture/shared";
+
+const REFUND_REASON_LABEL: Record<RefundReason, string> = {
+  PRINT_FAILED: "Cetakan gagal",
+  EXPIRED_PAID: "Bayar tapi QR expired",
+  CAMERA_FAILED: "Kamera gagal",
+  MANUAL: "Lainnya",
+};
 
 type Props = {
   sessionId: string;
@@ -13,6 +21,8 @@ type Props = {
   shareUrl: string;
   initialPhone: string | null;
   initialEmail: string | null;
+  /** Sudah ada log refund_manual: tombol refund disembunyikan (server juga 409). */
+  refunded?: boolean;
   /** Called after a notify/refund action succeeds, so the parent page can
    * refetch the session detail (payment logs, status) it owns. */
   onUpdated?: () => void;
@@ -24,11 +34,13 @@ export function SessionActions({
   shareUrl,
   initialPhone,
   initialEmail,
+  refunded = false,
   onUpdated,
 }: Props) {
   const [phone, setPhone] = useState(initialPhone ?? "");
   const [email, setEmail] = useState(initialEmail ?? "");
   const [reason, setReason] = useState("");
+  const [reasonCode, setReasonCode] = useState<RefundReason>("MANUAL");
   const [busy, setBusy] = useState<null | "notify" | "resend" | "refund" | "copy">(null);
 
   async function handleNotify() {
@@ -73,13 +85,17 @@ export function SessionActions({
       toast.error("Alasan refund wajib diisi");
       return;
     }
-    if (!confirm("Yakin refund manual? Status session akan diubah jadi 'failed'.")) return;
+    const msg =
+      status === "done"
+        ? "Yakin catat refund? Status sesi tetap 'done' dan link foto tetap aktif."
+        : "Yakin refund manual? Status session akan diubah jadi 'failed'.";
+    if (!confirm(msg)) return;
     setBusy("refund");
     try {
       const res = await fetch(`/api/session/${sessionId}/refund`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason }),
+        body: JSON.stringify({ reason, reasonCode }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -103,7 +119,8 @@ export function SessionActions({
       .finally(() => setBusy(null));
   }
 
-  const canRefund = status === "paid" || status === "capturing" || status === "processing";
+  const canRefund =
+    !refunded && (status === "paid" || status === "capturing" || status === "processing" || status === "done");
 
   return (
     <div className="space-y-4">
@@ -159,8 +176,20 @@ export function SessionActions({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            <select
+              aria-label="Alasan refund"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+              value={reasonCode}
+              onChange={(e) => setReasonCode(e.target.value as RefundReason)}
+            >
+              {REFUND_REASONS.map((r) => (
+                <option key={r} value={r}>
+                  {REFUND_REASON_LABEL[r]}
+                </option>
+              ))}
+            </select>
             <Textarea
-              placeholder="Alasan refund (wajib)"
+              placeholder="Catatan refund (wajib)"
               rows={3}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -175,7 +204,7 @@ export function SessionActions({
               Tandai Refund
             </Button>
             <p className="text-xs text-muted-foreground">
-              Refund di Sprint 2 hanya catat status di sistem. Refund nominal real ke customer tetap manual lewat dashboard Xendit.
+              Sistem hanya mencatat. Uang dikembalikan manual (tunai di kasir atau voucher), tidak lewat Xendit.
             </p>
           </CardContent>
         </Card>

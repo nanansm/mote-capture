@@ -43,6 +43,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   BUSY_SESSION_STATUSES,
+  type RefundReason,
   decode,
   encode,
   isPush,
@@ -125,6 +126,12 @@ export type MarkDoneResult =
 export type CancelVoucherResult =
   | { ok: true; voucherId: string; code: string; created: boolean }
   | { ok: false; code: "INVALID_STATE" | "NOT_FOUND"; status?: string };
+
+export type RefundInput = { reasonCode: RefundReason; reason: string; byEmail: string };
+
+export type RefundResult =
+  | { ok: true; status: "done" | "failed" }
+  | { ok: false; code: "ALREADY_REFUNDED" | "INVALID_STATE" | "NOT_FOUND"; status?: string };
 
 export type PrintStatusInput = {
   sessionId: string;
@@ -676,53 +683,48 @@ export class BoothDO extends DurableObject<Bindings> {
     logger.info("booth_do_force_reset", { boothId, sessionId, byEmail });
   }
 
-  // T2.10: admin manual-refund action, called via src/do/rpc.ts#refundSession
-  // (never directly by a route). Ported from
-  // apps/cloud/app/api/session/[id]/refund/route.ts, which wrote
-  // `sessions.status='failed'` plus a refund-metadata blob directly — that
-  // write now happens here since BoothDO is the sole writer of `sessions`.
-  // Sprint-2 behavior only: records the refund intent, no real payment
-  // provider refund call yet, no kiosk broadcast (the old route didn't emit
-  // one either). Silently no-ops (matching markPaid/markExpired's pattern)
-  // if the session isn't in a refundable state — the route already checked
-  // this before calling in, so this is only a defense against a race.
-  async refundSession(boothId: string, sessionId: string, input: { reason: string; byEmail: string }): Promise<void> {
+  // Refund manual admin (PRD bagian 8 #7, bagian 10). Tanpa panggilan refund
+  // Xendit; uang dikembalikan tunai/voucher di kasir, di sini hanya dicatat.
+  //  - paid/capturing/processing -> failed (sesi tidak selesai), alarm dibersihkan.
+  //  - done -> status TETAP done, cukup metadata; link share tetap hidup.
+  //  - sekali saja per sesi (metadata.refund ada -> ALREADY_REFUNDED) supaya
+  //    uang tidak keluar dua kali karena admin klik ganda.
+  async refundSession(boothId: string, sessionId: string, input: RefundInput): Promise<RefundResult> {
     const db = getDb(this.env.DB);
     const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
     if (!session || session.boothId !== boothId) {
       logger.warn("booth_do_refund_session_mismatch", { boothId, sessionId });
-      return;
+      return { ok: false, code: "NOT_FOUND" };
     }
-    if (session.status !== "paid" && session.status !== "capturing" && session.status !== "processing") {
-      logger.info("booth_do_refund_noop", { boothId, sessionId, status: session.status });
-      return;
-    }
+    const meta = (session.metadata as Record<string, unknown> | null) ?? {};
+    if (meta.refund || meta.refundedAt) return { ok: false, code: "ALREADY_REFUNDED" };
 
+    const busy = (BUSY_SESSION_STATUSES as readonly string[]).includes(session.status);
+    if (!busy && session.status !== "done") {
+      return { ok: false, code: "INVALID_STATE", status: session.status };
+    }
+    const nextStatus = session.status === "done" ? "done" : "failed";
+    const refund = {
+      reasonCode: input.reasonCode,
+      note: input.reason,
+      by: input.byEmail,
+      at: new Date().toISOString(),
+      fromStatus: session.status,
+    };
     await db
       .update(schema.sessions)
-      .set({
-        status: "failed",
-        metadata: {
-          ...(session.metadata as object),
-          refundReason: input.reason,
-          refundedAt: new Date().toISOString(),
-          refundedBy: input.byEmail,
-        },
-      })
+      .set({ status: nextStatus, metadata: { ...meta, refund } })
       .where(eq(schema.sessions.id, sessionId));
-    await this.clearScheduledWork(sessionId);
+    if (busy) await this.clearScheduledWork(sessionId);
 
-    // Admin dashboard broadcast point (ADMIN_SESSION_UPDATE) — session
-    // refunded. Not present in the old route (no Socket.io emit at all
-    // there); added for parity with every other status transition in this
-    // file so the admin dashboard doesn't miss it.
     await adminBroadcast(this.env, SocketEvents.ADMIN_SESSION_UPDATE, {
       boothId,
       sessionId,
-      status: "failed",
+      status: nextStatus,
       amount: session.amount,
     });
-    logger.info("booth_do_refund_session", { boothId, sessionId, byEmail: input.byEmail });
+    logger.info("booth_do_refund_session", { boothId, sessionId, byEmail: input.byEmail, from: session.status });
+    return { ok: true, status: nextStatus };
   }
 
   // PRD bagian 8 #15/#3: unggahan foto hanya menambah baris `photos`.
