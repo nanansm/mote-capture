@@ -23,10 +23,11 @@ import { logger } from "@/lib/logger";
 import { getPaymentProvider } from "@/lib/payment";
 import { resolveCredentials } from "@/lib/runtime-credentials";
 import { markExpired, markPaid } from "@/do/rpc";
+import { isLatePayment, recordLatePayment } from "@/lib/auto-voucher";
 
 const webhook = new Hono<{ Bindings: Bindings }>();
 
-const PAID_TERMINAL_STATUSES = new Set(["paid", "capturing", "processing", "done"]);
+const PAID_TERMINAL_STATUSES = new Set(["paid", "capturing", "processing", "done", "abandoned_paid", "stale"]);
 
 webhook.post("/xendit", async (c) => {
   const rawBody = await c.req.text();
@@ -93,20 +94,40 @@ webhook.post("/xendit", async (c) => {
       return c.json({ ok: true, duplicate: true });
     }
 
-    await db.insert(schema.paymentLogs).values({
-      sessionId,
-      provider: "xendit",
-      eventType: "paid",
-      payload: (verification.rawPayload as Record<string, unknown> | undefined) ?? null,
-    });
+    const rawPayload = (verification.rawPayload as Record<string, unknown> | undefined) ?? null;
 
-    await markPaid(c.env, session.boothId, sessionId, {
-      amount: verification.amount,
-      provider: "xendit",
-    });
+    if (session.status === "payment") {
+      await db.insert(schema.paymentLogs).values({ sessionId, provider: "xendit", eventType: "paid", payload: rawPayload });
+      const transitioned = await markPaid(c.env, session.boothId, sessionId, {
+        amount: verification.amount,
+        provider: "xendit",
+      });
+      if (transitioned) {
+        logger.info("xendit_webhook_paid", { sessionId, amount: verification.amount });
+        return c.json({ ok: true });
+      }
+      // Alarm kedaluwarsa menang di antara baca dan markPaid. Baca ulang lalu
+      // perlakukan sebagai pembayaran terlambat kalau memang tertutup tanpa bayar.
+      const [fresh] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
+      if (!fresh || !isLatePayment(fresh)) {
+        return c.json({ ok: true, duplicate: true });
+      }
+    } else if (!isLatePayment(session)) {
+      await db.insert(schema.paymentLogs).values({ sessionId, provider: "xendit", eventType: "paid_unexpected_status", payload: rawPayload });
+      logger.warn("xendit_webhook_paid_unexpected_status", { sessionId, status: session.status });
+      return c.json({ ok: true });
+    }
 
-    logger.info("xendit_webhook_paid", { sessionId, amount: verification.amount });
-    return c.json({ ok: true });
+    // Pembayaran terlambat. Selalu balas 200: Xendit tidak perlu mengulang,
+    // dan voucher idempoten per sesi kalau callback tetap terulang.
+    const voucher = await recordLatePayment(db, session, {
+      provider: "xendit",
+      rawPayload,
+      paidAmount: verification.amount ?? null,
+    });
+    // Kode voucher tidak pernah masuk log (PRD bagian 12).
+    logger.info("xendit_webhook_late_payment", { sessionId, voucherId: voucher.id, created: voucher.created });
+    return c.json({ ok: true, latePayment: true });
   }
 
   if (verification.event === "expired" || verification.event === "failed") {

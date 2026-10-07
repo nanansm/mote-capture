@@ -25,6 +25,7 @@ import { requireAdmin } from "@/middleware/admin";
 import { getDb, schema } from "@/db";
 import { forceReset, markPaid, refundSession } from "@/do/rpc";
 import { logger } from "@/lib/logger";
+import { isLatePayment, recordLatePayment } from "@/lib/auto-voucher";
 
 const sessionAdmin = new Hono<{ Bindings: Bindings; Variables: AdminVariables }>();
 
@@ -160,7 +161,17 @@ devMockPayRoutes.post("/mock-pay/:sessionId", async (c) => {
     });
   }
 
-  if (session.status !== "payment" && session.status !== "idle") {
+  // Uji A5: mock-pay setelah expired = webhook PAID terlambat, jalur yang sama.
+  if (isLatePayment(session)) {
+    const voucher = await recordLatePayment(db, session, {
+      provider: session.paymentProvider ?? "xendit",
+      rawPayload: { mock: true, dev: true },
+      paidAmount: session.amount,
+    });
+    return c.json({ ok: true, mock: true, latePayment: true, voucherId: voucher.id, sessionId });
+  }
+
+  if (session.status !== "payment") {
     return c.json(
       {
         error: `Session status is "${session.status}", cannot mock-pay`,

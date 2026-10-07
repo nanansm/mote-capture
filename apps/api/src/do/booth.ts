@@ -49,6 +49,7 @@ import {
   isRequest,
   MOCK_BRIDGE,
   REDEEM_LIMITS,
+  SESSION_TIMING,
   SocketEvents,
   type ActiveSessionSnapshot,
   type FrameLayout,
@@ -464,7 +465,7 @@ export class BoothDO extends DurableObject<Bindings> {
       // public HTTP endpoint (/api/voucher/redeem), which calls markPaid.
       // Still bounded by a timeout so an abandoned VOUCHER_INPUT session
       // doesn't linger forever — reuses the same qr_expiry alarm path.
-      expiresAt = new Date(Date.now() + 5 * 60_000);
+      expiresAt = new Date(Date.now() + SESSION_TIMING.VOUCHER_INPUT_EXPIRY_MS);
     } else {
       const { xendit } = await resolveCredentials(db, this.env);
       const provider = getPaymentProvider(
@@ -472,7 +473,8 @@ export class BoothDO extends DurableObject<Bindings> {
         this.env,
         xendit,
       );
-      const qr = await provider.createQR({ sessionId, amount, expiresInMinutes: 5 });
+      // PRD bagian 8 #4: QR hidup 1 menit, sama dengan PAYMENT_TIMEOUT kiosk.
+      const qr = await provider.createQR({ sessionId, amount, expiresInMinutes: SESSION_TIMING.QR_EXPIRY_MINUTES });
       qrString = qr.qrString;
       paymentRef = qr.providerRef;
       expiresAt = qr.expiresAt;
