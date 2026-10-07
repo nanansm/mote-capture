@@ -69,9 +69,8 @@ export default function KioskPage() {
         boothId={booth.id}
         boothName={booth.name}
         defaultPrice={booth.defaultPrice}
-        // Mode mock bridge dihapus (PRD bagian 8). UI kiosk baru di M2.
-        useMockBridge={false}
         isActive={booth.isActive}
+        frames={boot.data.frames}
       />
     </div>
   );

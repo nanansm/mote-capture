@@ -24,7 +24,7 @@ export function IdleState({
       data-testid="idle-start"
       onClick={blocked ? undefined : onStart}
       aria-disabled={blocked}
-      className=""relative flex h-full w-full cursor-pointer items-center justify-center overflow-hidden bg-gradient-to-br from-brand-yellow via-brand-cream to-brand-pink/40 text-left focus:outline-none"
+      className="relative flex h-full w-full cursor-pointer items-center justify-center overflow-hidden bg-gradient-to-br from-brand-yellow via-brand-cream to-brand-pink/40 text-left focus:outline-none"
     >
       <motion.div
         className="pointer-events-none absolute -top-32 -left-32 h-[26rem] w-[26rem] blob-yellow"

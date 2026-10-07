@@ -1,50 +1,50 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+// Kiosk M2 (PRD bagian 5): satu komponen yang merangkai tiga sumber event ke
+// mesin state murni (`@/lib/kiosk/state-machine`):
+//   1. ws DO `/ws/kiosk/:boothId`  -> sesi & pembayaran (cloud)
+//   2. ws agent `/agent/ws`        -> shutter, foto, compose (mini PC)
+//   3. timer lokal                 -> countdown, review, idle reset
+// Semua efek samping hidup di sini; reducer tidak pernah memanggil I/O.
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
-import { useTranslation } from "@/lib/i18n/use-translation";
-import { initialMachine, reducer } from "@/lib/kiosk/state-machine";
 import {
   createWsClient,
   KIOSK_TIMING,
   SocketEvents,
-  type CompositeReadyPayload,
+  WsRequestError,
+  type AgentEvent,
+  type AgentHealth,
   type ErrorPayload,
   type KioskBootData,
   type KioskReadyPayload,
   type PaymentPaidPayload,
-  type PhotoTakenPayload,
+  type PhotoSlot,
   type ResetPayload,
   type WsClient,
 } from "@capture/shared";
+import { useTranslation } from "@/lib/i18n/use-translation";
+import {
+  initialMachine,
+  reducer,
+  type CallStaffReason,
+  type KioskEvent,
+  type KioskMachine,
+  type PaymentMethod,
+} from "@/lib/kiosk/state-machine";
+import { agent, agentAsset, connectAgentWs } from "@/lib/kiosk/agent";
 import { LanguageToggle } from "./language-toggle";
+import { StaffPanel } from "./staff-panel";
 import { IdleState } from "./states/idle";
 import { PilihFrameState } from "./states/pilih-frame";
 import { KonfirmasiState } from "./states/konfirmasi";
 import { PaymentState } from "./states/payment";
+import { VoucherInputState } from "./states/voucher-input";
 import { PembayaranOkState } from "./states/pembayaran-ok";
 import { CountdownState } from "./states/countdown";
+import { ReviewShotState } from "./states/review-shot";
 import { ProcessingState } from "./states/processing";
-import { PreviewState } from "./states/preview";
-import { InputKontakState } from "./states/input-kontak";
 import { DoneState } from "./states/done";
-import { VoucherInputState } from "./states/voucher-input";
-
-// ── WebSocket wiring ────────────────────────────────────────────────────
-//
-// apps/cloud drove this component over Socket.io (a server that ran
-// alongside Next — see apps/cloud/lib/socket/server.ts). That server was
-// replaced by a raw WebSocket at `/ws/kiosk/:boothId` on BoothDO (see
-// apps/api/src/index.ts + apps/api/src/do/booth.ts), speaking the envelope
-// protocol built in `@capture/shared` (`createWsClient` + `SocketEvents`).
-//
-// Requests that expect a reply go through `client.request(ev, data)`
-// (replaces the old `emit(ev, payload, ackCallback)`); pushes from the
-// server are dispatched into the state machine via `client.on(ev, handler)`.
-// See the `useEffect` below that owns the client's lifecycle.
-function buildKioskWsUrl(boothId: string): string {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws/kiosk/${encodeURIComponent(boothId)}`;
-}
+import { BoothBusyState, CallStaffState } from "./states/busy-call-staff";
 
 type FrameOption = KioskBootData["frames"][number];
 
@@ -52,510 +52,550 @@ type Props = {
   boothId: string;
   boothName: string;
   defaultPrice: number;
-  useMockBridge: boolean;
   isActive: boolean;
+  frames: FrameOption[];
 };
+
+function buildKioskWsUrl(boothId: string): string {
+  // Rig uji / agent yang tidak mem-proxy `/ws` boleh menunjuk cloud langsung.
+  const cloud = (import.meta.env.VITE_CLOUD_WS_URL as string | undefined)?.replace(/\/$/, "");
+  if (cloud) return `${cloud}/ws/kiosk/${encodeURIComponent(boothId)}`;
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/ws/kiosk/${encodeURIComponent(boothId)}`;
+}
+
+const sec = (ms: number) => Math.round(ms / 1000);
+const IDLE_RESET_STATES = new Set(["PILIH_FRAME", "KONFIRMASI", "VOUCHER_INPUT", "BOOTH_BUSY"]);
+const AGENT_CRITICAL_STATES = new Set(["COUNTDOWN", "REVIEW_SHOT", "PROCESSING"]);
+const LANG_TOGGLE_STATES = new Set(["IDLE", "PILIH_FRAME", "KONFIRMASI", "DONE"]);
 
 export function KioskShell(props: Props) {
   const { t, lang, setLang } = useTranslation();
-  const [machine, dispatch] = useReducer(
-    reducer,
-    initialMachine({
-      boothId: props.boothId,
-      boothName: props.boothName,
-      defaultPrice: props.defaultPrice,
-      language: "id",
-      mockMode: props.useMockBridge,
-      bridgeOnline: !props.useMockBridge,
-    }),
-  );
+  const [machine, dispatchRaw] = useReducer(reducer, undefined, initialMachine);
   const { state, context } = machine;
-  const [frames, setFrames] = useState<FrameOption[]>([]);
+
+  // Ref ke mesin terkini untuk handler ws (closure-nya dibuat sekali).
+  const machineRef = useRef<KioskMachine>(machine);
+  machineRef.current = machine;
+  const dispatch = useCallback((ev: KioskEvent) => dispatchRaw(ev), []);
+
   const [busy, setBusy] = useState(false);
-  const [doneCountdown, setDoneCountdown] = useState(8);
   const [flashing, setFlashing] = useState(false);
-  // Which photo steps have already had their shutter requested. Per-step, not a
-  // single boolean, because the kiosk now asks for every photo at its own
-  // CHEESE — the latch only exists to survive re-renders of the same step.
-  // Cleared on RESET via the IDLE effect below.
-  const capturedStepsRef = useRef<Set<number>>(new Set());
-
-  // WebSocket connection — one client per mounted boothId, torn down on
-  // unmount. `wsConnected` mirrors the client's open/closed state so the UI
-  // can show a "reconnecting" indicator; `createWsClient` handles the actual
-  // reconnect-with-backoff internally, so this component never needs to
-  // retry a connect itself.
-  const wsClientRef = useRef<WsClient | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [agentConnected, setAgentConnected] = useState(false);
+  const [health, setHealth] = useState<AgentHealth | null>(null);
+  const [staffOpen, setStaffOpen] = useState(false);
+  const [reviewLeft, setReviewLeft] = useState(sec(KIOSK_TIMING.REVIEW_SHOT_MS));
+  const [doneLeft, setDoneLeft] = useState(sec(KIOSK_TIMING.DONE_AUTO_RESET_MS));
 
-  const wsRequest = useCallback(async <T = unknown,>(ev: string, data?: unknown): Promise<T> => {
-    const client = wsClientRef.current;
+  const wsRef = useRef<WsClient | null>(null);
+  const sessionInFlight = useRef(false);
+  const firedKey = useRef<string | null>(null);
+  const composeKey = useRef<string | null>(null);
+  const staffTaps = useRef<number[]>([]);
+
+  const wsRequest = useCallback(async <T,>(ev: string, data?: unknown): Promise<T> => {
+    const client = wsRef.current;
     if (!client) throw new Error("WebSocket belum siap");
-    return client.request(ev, data) as Promise<T>;
+    return (await client.request(ev, data)) as T;
   }, []);
 
+  const callStaff = useCallback(
+    (reason: CallStaffReason, message?: string) => dispatch({ type: "CALL_STAFF", reason, message }),
+    [dispatch],
+  );
+
+  // ── Pemulihan setelah reload (PRD bagian 5) ────────────────────────────
+  const recover = useCallback(
+    async (snap: KioskReadyPayload["activeSession"]) => {
+      if (!snap || machineRef.current.context.sessionId) return;
+      // QR yang ditinggal tidak dipulihkan: DO memensiunkannya saat sesi baru.
+      if (snap.status === "payment") return;
+      const base = { sessionId: snap.id, downloadToken: snap.downloadToken };
+      if (snap.status === "paid") {
+        dispatch({ type: "RESUME", to: "PEMBAYARAN_OK", ...base });
+        return;
+      }
+      let h: AgentHealth | null = null;
+      try {
+        h = await agent.health();
+      } catch {
+        h = null;
+      }
+      const a = h?.activeSession;
+      if (!a || a.id !== snap.id) {
+        dispatch({ type: "RESUME", to: "CALL_STAFF", reason: "RECOVERY_FAILED", ...base });
+        return;
+      }
+      const thumbs = a.thumbs.map((u) => agentAsset(u));
+      const common = { ...base, thumbs, retakeUsed: a.retakeUsed };
+      if (a.phase === "capturing") dispatch({ type: "RESUME", to: "COUNTDOWN", slot: a.nextSlot, ...common });
+      else if (a.phase === "reviewing") {
+        const slot = Math.max(1, Math.min(KIOSK_TIMING.PHOTO_COUNT, a.nextSlot - 1)) as PhotoSlot;
+        dispatch({ type: "RESUME", to: "REVIEW_SHOT", slot, ...common });
+      } else if (a.phase === "composing") dispatch({ type: "RESUME", to: "PROCESSING", slot: 4, ...common });
+      else dispatch({ type: "RESUME", to: "PROCESSING", slot: 4, ...common });
+    },
+    [dispatch],
+  );
+
+  // ── ws DO ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const client = createWsClient({
       url: () => buildKioskWsUrl(props.boothId),
       onOpen: () => setWsConnected(true),
       onClose: () => setWsConnected(false),
     });
-    wsClientRef.current = client;
-
-    // Push handlers — server -> kiosk events, mapped onto the state machine's
-    // reducer events. See kiosk-shell.tsx report notes for the events that
-    // have no reducer equivalent (STATE_CHANGE, PRINT_DONE): those are
-    // logged but intentionally not dispatched anywhere.
+    wsRef.current = client;
     const unsubs: Array<() => void> = [];
-    const bind = <T,>(ev: string, handler: (data: T) => void) => {
-      const wrapped = (data: unknown) => handler(data as T);
+    const bind = <T,>(ev: string, fn: (data: T) => void) => {
+      const wrapped = (d: unknown) => fn(d as T);
       client.on(ev, wrapped);
       unsubs.push(() => client.off(ev, wrapped));
     };
-
-    // Kamera kini dikendalikan booth-agent lokal, bukan bridge cloud. Status
-    // kamera datang dari `/agent/ws` (M2); sementara anggap selalu online.
-    bind<KioskReadyPayload>(SocketEvents.KIOSK_READY, () => {
-      dispatch({ type: "SET_BRIDGE_STATUS", online: true, mockMode: false });
-    });
-    // Not currently pushed by BoothDO (session:create's *reply* carries the
-    // QR data instead — see requestSession below) — bound anyway so the
-    // kiosk stays correct if the server starts pushing it independently
-    // (e.g. a payment-provider webhook re-creating a QR mid-session).
-    bind<{ sessionId: string; qrString: string; amount: number; expiresAt: string; mockMode: boolean }>(
-      SocketEvents.PAYMENT_QR,
-      (data) => dispatch({ type: "PAYMENT_QR", ...data }),
+    bind<KioskReadyPayload>(SocketEvents.KIOSK_READY, (d) => void recover(d.activeSession));
+    bind<PaymentPaidPayload>(SocketEvents.PAYMENT_PAID, (d) =>
+      dispatch({ type: "PAYMENT_PAID", sessionId: d.sessionId, downloadToken: d.downloadToken ?? null }),
     );
-    bind<PaymentPaidPayload>(SocketEvents.PAYMENT_PAID, (data) => {
-      dispatch({ type: "PAYMENT_PAID", sessionId: data.sessionId });
-    });
-    bind<{ sessionId: string }>(SocketEvents.PAYMENT_EXPIRED, () => {
-      dispatch({ type: "PAYMENT_EXPIRED" });
-    });
-    bind<PhotoTakenPayload>(SocketEvents.PHOTO_TAKEN, (data) => {
-      dispatch({ type: "PHOTO_TAKEN", url: data.url, index: data.index });
-    });
-    bind<CompositeReadyPayload>(SocketEvents.COMPOSITE_READY, (data) => {
-      dispatch({ type: "COMPOSITE_READY", url: data.url, downloadToken: data.downloadToken });
-    });
-    bind<ResetPayload>(SocketEvents.RESET, () => {
+    bind<{ sessionId?: string }>(SocketEvents.PAYMENT_EXPIRED, (d) =>
+      dispatch({ type: "PAYMENT_EXPIRED", sessionId: d.sessionId }),
+    );
+    bind<ResetPayload>(SocketEvents.RESET, (d) => {
+      const own = machineRef.current.context.sessionId;
+      // RESET milik sesi lain (mis. checkout lama yang dipensiunkan) diabaikan.
+      if (d.sessionId && own && d.sessionId !== own) return;
+      if (!own && machineRef.current.state !== "IDLE" && d.sessionId) return;
       dispatch({ type: "RESET" });
     });
-    bind<ErrorPayload>(SocketEvents.ERROR, (data) => {
-      dispatch({ type: "ERROR", message: data.message });
-    });
-    // No reducer equivalent — printing is fire-and-forget from the kiosk's
-    // perspective (DONE is driven by CONTACT_SUBMITTED/timeout, not by the
-    // physical printer finishing). Logged for observability only.
-    bind<{ sessionId: string }>(SocketEvents.PRINT_DONE, (data) => {
-      console.debug("[kiosk] print:done (no UI state change)", data);
-    });
-    bind<{ sessionId: string; state: string }>(SocketEvents.STATE_CHANGE, (data) => {
-      console.debug("[kiosk] state:change push (no reducer mapping)", data);
-    });
-
+    bind<ErrorPayload>(SocketEvents.ERROR, (d) => toast.error(d.message));
     return () => {
       for (const off of unsubs) off();
       client.close();
-      wsClientRef.current = null;
+      wsRef.current = null;
     };
-  }, [props.boothId]);
+  }, [props.boothId, dispatch, recover]);
 
-  // Sync language from translation hook into machine context
+  // ── ws agent + health ──────────────────────────────────────────────────
   useEffect(() => {
-    dispatch({ type: "SET_LANGUAGE", language: lang });
-  }, [lang]);
-
-  // Boot data fetch
-  useEffect(() => {
-    let active = true;
-    fetch(`/api/kiosk/boot?boothId=${encodeURIComponent(props.boothId)}`)
-      .then((r) => r.json())
-      .then((body) => {
-        if (!active) return;
-        if (body?.data?.frames) setFrames(body.data.frames as FrameOption[]);
-      })
-      .catch(() => undefined);
+    const onEvent = (ev: AgentEvent) => {
+      switch (ev.type) {
+        case "camera.status":
+          setHealth((h) => (h ? { ...h, camera: { connected: ev.connected, model: ev.model, lastError: ev.lastError } } : h));
+          if (!ev.connected && AGENT_CRITICAL_STATES.has(machineRef.current.state)) callStaff("CAMERA_OFFLINE");
+          return;
+        case "shutter_fired":
+          dispatch({ type: "SHUTTER_FIRED", sessionId: ev.sessionId, slot: ev.slot });
+          setFlashing(true);
+          window.setTimeout(() => setFlashing(false), KIOSK_TIMING.COUNTDOWN_FLASH_MS);
+          return;
+        case "photo.ready":
+          dispatch({
+            type: "PHOTO_READY",
+            sessionId: ev.sessionId,
+            slot: ev.slot,
+            thumbUrl: agentAsset(ev.thumbUrl) ?? ev.thumbUrl,
+            retakeUsed: ev.retakeUsed,
+          });
+          return;
+        case "photo.failed":
+          if (ev.sessionId === machineRef.current.context.sessionId) callStaff("PHOTO_FAILED", ev.error);
+          return;
+        case "compose.done":
+          dispatch({ type: "COMPOSE_DONE", sessionId: ev.sessionId, compositeUrl: agentAsset(ev.compositeUrl) ?? ev.compositeUrl });
+          return;
+        case "compose.failed":
+          if (ev.sessionId === machineRef.current.context.sessionId) callStaff("COMPOSE_FAILED", ev.error);
+          return;
+        case "counters.updated":
+          setHealth((h) =>
+            h ? { ...h, counters: { paper: ev.paper, ink: ev.ink, lowPaper: ev.lowPaper, lowInk: ev.lowInk } } : h,
+          );
+          return;
+        default:
+          return;
+      }
+    };
+    const stop = connectAgentWs({
+      onEvent,
+      onOpen: () => setAgentConnected(true),
+      onClose: () => setAgentConnected(false),
+    });
+    let alive = true;
+    const poll = async () => {
+      try {
+        const h = await agent.health();
+        if (alive) setHealth(h);
+      } catch {
+        if (alive) setHealth(null);
+      }
+    };
+    void poll();
+    const id = window.setInterval(poll, 10_000);
     return () => {
-      active = false;
+      alive = false;
+      stop();
+      window.clearInterval(id);
     };
-  }, [props.boothId]);
+  }, [dispatch, callStaff]);
 
-  // ── State-specific timers ──────────────────────────────────────────────
-
-  // Reset the per-session shutter latches when we return to IDLE, so the next
-  // session requests each photo again at its own CHEESE moment.
+  // Agent hilang lebih lama dari grace saat sesi berjalan: panggil staf.
   useEffect(() => {
-    if (state === "IDLE") capturedStepsRef.current.clear();
-  }, [state]);
+    if (agentConnected || !AGENT_CRITICAL_STATES.has(state)) return;
+    const id = window.setTimeout(() => callStaff("AGENT_OFFLINE"), KIOSK_TIMING.AGENT_WS_GRACE_MS);
+    return () => window.clearTimeout(id);
+  }, [agentConnected, state, callStaff]);
 
-  // PAYMENT timeout — auto cancel when QR expires
+  // ── Sesi & pembayaran ──────────────────────────────────────────────────
+  const chooseMethod = useCallback(
+    async (method: PaymentMethod) => {
+      const frame = machineRef.current.context.selectedFrame;
+      if (!frame || sessionInFlight.current) return;
+      sessionInFlight.current = true;
+      setBusy(true);
+      dispatch({ type: "CHOOSE_METHOD", method });
+      try {
+        const data = await wsRequest<{ sessionId: string; qrString: string | null; amount: number; expiresAt: string }>(
+          SocketEvents.CONFIRM_AND_PAY,
+          { boothId: props.boothId, frameId: frame.id, method },
+        );
+        dispatch({ type: "SESSION_CREATED", ...data });
+      } catch (err) {
+        if (err instanceof WsRequestError && err.code === "BOOTH_BUSY") {
+          const r = err.details?.releasesAt;
+          dispatch({ type: "BOOTH_BUSY", releasesAt: typeof r === "string" ? r : null });
+        } else {
+          toast.error(err instanceof Error ? err.message : t("kiosk.error.session"));
+          dispatch({ type: "RESET" });
+        }
+      } finally {
+        sessionInFlight.current = false;
+        setBusy(false);
+      }
+    },
+    [dispatch, props.boothId, t, wsRequest],
+  );
+
+  const cancelSession = useCallback(
+    (reason: string) => {
+      const sessionId = machineRef.current.context.sessionId;
+      if (sessionId) void wsRequest(SocketEvents.CANCEL, { sessionId, reason }).catch(() => undefined);
+    },
+    [wsRequest],
+  );
+
+  const backFromPayment = useCallback(() => {
+    cancelSession("customer-back");
+    dispatch({ type: "BACK" });
+  }, [cancelSession, dispatch]);
+
+  // QR kedaluwarsa lokal (cadangan kalau push PAYMENT_EXPIRED hilang).
   useEffect(() => {
-    if (state !== "PAYMENT" || !context.paymentExpiresAt) return;
-    const ms = new Date(context.paymentExpiresAt).getTime() - Date.now();
-    if (ms <= 0) {
-      dispatch({ type: "PAYMENT_EXPIRED" });
+    if (state !== "PAYMENT" || !context.expiresAt) return;
+    const ms = new Date(context.expiresAt).getTime() - Date.now();
+    const id = window.setTimeout(() => dispatch({ type: "PAYMENT_EXPIRED", sessionId: context.sessionId ?? undefined }), Math.max(0, ms));
+    return () => window.clearTimeout(id);
+  }, [state, context.expiresAt, context.sessionId, dispatch]);
+
+  const startCapture = useCallback(async () => {
+    const { sessionId, selectedFrame } = machineRef.current.context;
+    if (!sessionId || busy) return;
+    setBusy(true);
+    try {
+      await wsRequest(SocketEvents.START_CAPTURE, { sessionId });
+    } catch (err) {
+      setBusy(false);
+      toast.error(err instanceof Error ? err.message : t("kiosk.error.session"));
       return;
     }
-    const id = window.setTimeout(() => dispatch({ type: "PAYMENT_EXPIRED" }), ms);
-    return () => window.clearTimeout(id);
-  }, [state, context.paymentExpiresAt]);
-
-  // COUNTDOWN orchestration: GET_READY (photo 1 only) → 3 → 2 → 1 → CHEESE →
-  // hold → shutter. The kiosk owns the shutter timing for EVERY photo, not
-  // just the first: the guest is reading "CHEESE!", so that is the moment the
-  // frame has to be grabbed. After the shutter we wait for the bridge's
-  // PHOTO_TAKEN event, which advances the step and restarts the cadence.
-  useEffect(() => {
-    if (state !== "COUNTDOWN") return;
-    const phase = context.countdownPhase;
-
-    if (phase === "GET_READY") {
-      const id = window.setTimeout(() => {
-        dispatch({ type: "COUNTDOWN_PHASE", phase: "COUNTDOWN" });
-        dispatch({ type: "COUNTDOWN_TICK", value: 3 });
-      }, KIOSK_TIMING.GET_READY_MS);
-      return () => window.clearTimeout(id);
+    try {
+      await agent.startSession(sessionId, selectedFrame?.id ?? null);
+      dispatch({ type: "CAPTURE_STARTED" });
+    } catch {
+      callStaff("AGENT_OFFLINE");
+    } finally {
+      setBusy(false);
     }
+  }, [busy, callStaff, dispatch, t, wsRequest]);
 
-    if (phase === "COUNTDOWN") {
-      if (context.countdownNumber > 1) {
-        // Photos 2 and 3 open on "3" straight after the previous flash, so
-        // hold that first digit a beat longer — otherwise the three shots read
-        // as one continuous burst instead of three separate poses.
-        const isFirstDigitOfLaterPhoto = context.countdownNumber === 3 && context.countdownStep > 1;
-        const delay = isFirstDigitOfLaterPhoto
-          ? KIOSK_TIMING.COUNTDOWN_TICK_MS + KIOSK_TIMING.POST_CAPTURE_HOLD_MS
-          : KIOSK_TIMING.COUNTDOWN_TICK_MS;
-        const id = window.setTimeout(() => {
-          dispatch({ type: "COUNTDOWN_TICK", value: context.countdownNumber - 1 });
-        }, delay);
-        return () => window.clearTimeout(id);
-      }
-      // We just rendered "1" — after one tick, swap to CHEESE.
+  // ── Countdown -> shutter ───────────────────────────────────────────────
+  useEffect(() => {
+    if (state !== "COUNTDOWN") {
+      firedKey.current = null;
+      return;
+    }
+    const { countdownPhase: phase, countdown, slot, retaking, sessionId } = context;
+    if (phase === "GET_READY" || phase === "COUNTDOWN") {
       const id = window.setTimeout(() => {
-        dispatch({ type: "COUNTDOWN_PHASE", phase: "CHEESE" });
+        if (countdown > 1) dispatch({ type: "COUNTDOWN_PHASE", phase, value: countdown - 1 });
+        else if (phase === "GET_READY")
+          dispatch({ type: "COUNTDOWN_PHASE", phase: "COUNTDOWN", value: sec(KIOSK_TIMING.COUNTDOWN_PER_PHOTO_MS) });
+        else dispatch({ type: "COUNTDOWN_PHASE", phase: "HOLD", value: 0 });
       }, KIOSK_TIMING.COUNTDOWN_TICK_MS);
       return () => window.clearTimeout(id);
     }
-
-    // CHEESE: let the word sit on screen for CHEESE_HOLD_MS, then flash and ask
-    // the cloud to fire the shutter for THIS step. The per-step latch keeps a
-    // re-render from double-firing; the cloud also treats a repeat ask for an
-    // already-captured index as a no-op, so a stray retry can't skip a photo.
-    const step = context.countdownStep;
-    if (phase === "CHEESE" && context.sessionId && !capturedStepsRef.current.has(step)) {
-      capturedStepsRef.current.add(step);
-      const sessionId = context.sessionId;
-      let flashOffId = 0;
-      const shutterId = window.setTimeout(() => {
-        // The white flash was dead code until now — setFlashing was never
-        // called anywhere, so the shutter had no visual feedback at all.
-        setFlashing(true);
-        flashOffId = window.setTimeout(() => setFlashing(false), KIOSK_TIMING.COUNTDOWN_FLASH_MS);
-        void wsRequest(SocketEvents.START_CAPTURE, { sessionId, photoIndex: step }).catch((err) => {
-          toast.error(err instanceof Error ? err.message : "Gagal memulai foto");
-          capturedStepsRef.current.delete(step);
-          dispatch({ type: "RESET" });
-        });
-      }, KIOSK_TIMING.CHEESE_HOLD_MS);
-      return () => {
-        window.clearTimeout(shutterId);
-        if (flashOffId) window.clearTimeout(flashOffId);
-        setFlashing(false);
-      };
+    // HOLD: picu shutter sekali per (sesi, slot, retake), tunggu photo.ready.
+    const key = `${sessionId}:${slot}:${retaking ? "r" : "c"}`;
+    if (sessionId && firedKey.current !== key) {
+      firedKey.current = key;
+      const req = retaking ? agent.retake(sessionId, slot) : agent.capture(sessionId, slot);
+      req
+        .then((r) => {
+          if (!r.accepted) callStaff("PHOTO_FAILED", "capture ditolak agent");
+        })
+        .catch(() => callStaff("AGENT_OFFLINE"));
     }
-  }, [state, context.countdownPhase, context.countdownNumber, context.countdownStep, context.sessionId, wsRequest]);
+    const id = window.setTimeout(() => dispatch({ type: "TIMEOUT", from: "COUNTDOWN" }), KIOSK_TIMING.CAPTURE_WAIT_MS);
+    return () => window.clearTimeout(id);
+  }, [state, context, dispatch, callStaff]);
 
-  // PROCESSING timeout fallback
+  // ── Review per foto ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (state !== "REVIEW_SHOT") return;
+    setReviewLeft(sec(KIOSK_TIMING.REVIEW_SHOT_MS));
+    const started = Date.now();
+    const tick = window.setInterval(() => {
+      setReviewLeft(Math.max(0, sec(KIOSK_TIMING.REVIEW_SHOT_MS - (Date.now() - started))));
+    }, 250);
+    const id = window.setTimeout(() => dispatch({ type: "TIMEOUT", from: "REVIEW_SHOT" }), KIOSK_TIMING.REVIEW_SHOT_MS);
+    return () => {
+      window.clearInterval(tick);
+      window.clearTimeout(id);
+    };
+  }, [state, context.slot, dispatch]);
+
+  // ── Compose ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (state !== "PROCESSING") return;
-    const id = window.setTimeout(() => {
-      // If composite never arrived, give up gracefully
-      dispatch({ type: "ERROR", message: t("kiosk.error.unknown") });
-    }, KIOSK_TIMING.PROCESSING_TIMEOUT_MS);
+    const sessionId = context.sessionId;
+    if (sessionId && composeKey.current !== sessionId) {
+      composeKey.current = sessionId;
+      agent
+        .compose(sessionId)
+        .then((r) => {
+          if (r?.compositePath) dispatch({ type: "COMPOSE_DONE", sessionId, compositeUrl: agentAsset(r.compositePath)! });
+        })
+        .catch(() => undefined); // compose.failed / timeout yang memanggil staf
+    }
+    const id = window.setTimeout(() => dispatch({ type: "TIMEOUT", from: "PROCESSING" }), KIOSK_TIMING.PROCESSING_TIMEOUT_MS);
     return () => window.clearTimeout(id);
-  }, [state, t]);
+  }, [state, context.sessionId, dispatch]);
 
-  // PREVIEW auto-advance
   useEffect(() => {
-    if (state !== "PREVIEW") return;
-    const id = window.setTimeout(
-      () => dispatch({ type: "PREVIEW_DONE" }),
-      KIOSK_TIMING.PREVIEW_AUTO_ADVANCE_MS,
-    );
-    return () => window.clearTimeout(id);
+    if (state === "IDLE") composeKey.current = null;
   }, [state]);
 
-  // INPUT_KONTAK timeout — auto-skip
-  useEffect(() => {
-    if (state !== "INPUT_KONTAK") return;
-    const id = window.setTimeout(
-      () => dispatch({ type: "PREVIEW_DONE" }),
-      KIOSK_TIMING.CONTACT_TIMEOUT_MS,
-    );
-    return () => window.clearTimeout(id);
-  }, [state]);
-
-  // DONE auto-reset to IDLE
+  // ── DONE auto reset ────────────────────────────────────────────────────
   useEffect(() => {
     if (state !== "DONE") return;
-    setDoneCountdown(8);
-    const id = window.setInterval(() => {
-      setDoneCountdown((n) => {
-        if (n <= 1) {
-          window.clearInterval(id);
-          dispatch({ type: "RESET" });
-          return 0;
-        }
-        return n - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [state]);
+    const started = Date.now();
+    setDoneLeft(sec(KIOSK_TIMING.DONE_AUTO_RESET_MS));
+    const tick = window.setInterval(() => {
+      setDoneLeft(Math.max(0, sec(KIOSK_TIMING.DONE_AUTO_RESET_MS - (Date.now() - started))));
+    }, 500);
+    const id = window.setTimeout(() => dispatch({ type: "TIMEOUT", from: "DONE" }), KIOSK_TIMING.DONE_AUTO_RESET_MS);
+    return () => {
+      window.clearInterval(tick);
+      window.clearTimeout(id);
+    };
+  }, [state, dispatch]);
 
-  // ── Action handlers ────────────────────────────────────────────────────
+  // ── Idle reset tanpa sentuhan ──────────────────────────────────────────
+  useEffect(() => {
+    if (!IDLE_RESET_STATES.has(state) || staffOpen) return;
+    let id = 0;
+    const arm = () => {
+      window.clearTimeout(id);
+      id = window.setTimeout(() => {
+        if (machineRef.current.state === "VOUCHER_INPUT") cancelSession("idle-timeout");
+        dispatch({ type: "TIMEOUT", from: machineRef.current.state });
+      }, KIOSK_TIMING.IDLE_RESET_MS);
+    };
+    arm();
+    window.addEventListener("pointerdown", arm);
+    return () => {
+      window.clearTimeout(id);
+      window.removeEventListener("pointerdown", arm);
+    };
+  }, [state, staffOpen, cancelSession, dispatch]);
 
-  const handleStart = useCallback(() => {
-    dispatch({ type: "TAP_START" });
-  }, []);
-
-  const handleFramePicked = useCallback((frame: FrameOption) => {
-    dispatch({ type: "FRAME_PICKED", frame });
-  }, []);
-
-  // Both method buttons share the same session creation: the cloud creates
-  // the session row + (mock or real) Xendit QR, and the only thing that
-  // differs is which next state we transition to. The voucher path ignores
-  // the QR string but still needs sessionId from the PAYMENT_QR socket event.
-  //
-  // Idempotent on two axes:
-  //   - if context.sessionId is already set, we skip the emit entirely
-  //     (e.g. user navigates Voucher → Back → Voucher quickly)
-  //   - sessionInFlightRef guards against rapid double-clicks while the
-  //     first emit is still awaiting its ack
-  const sessionInFlightRef = useRef(false);
-  const requestSession = useCallback(
-    async (method: "qris" | "voucher") => {
-      if (context.sessionId) return true;
-      if (sessionInFlightRef.current) return true;
-      if (!context.selectedFrame) return false;
-      sessionInFlightRef.current = true;
-      setBusy(true);
-      try {
-        const data = await wsRequest<{
-          sessionId: string;
-          qrString: string | null;
-          amount: number;
-          expiresAt: string;
-          mockMode: boolean;
-          method: "qris" | "voucher";
-        }>(SocketEvents.CONFIRM_AND_PAY, {
-          boothId: props.boothId,
-          frameId: context.selectedFrame!.id,
-          method,
-        });
-        // BoothDO answers CONFIRM_AND_PAY's *reply* with the QR data directly
-        // (it never pushes a separate PAYMENT_QR event for this path) — feed
-        // it into the same reducer event the push handler would use.
-        dispatch({
-          type: "PAYMENT_QR",
-          sessionId: data.sessionId,
-          qrString: data.qrString ?? "",
-          amount: data.amount,
-          expiresAt: data.expiresAt,
-          mockMode: data.mockMode,
-        });
-        return true;
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Gagal membuat sesi");
-        dispatch({ type: "RESET" });
-        return false;
-      } finally {
-        sessionInFlightRef.current = false;
-        setBusy(false);
-      }
-    },
-    [context.sessionId, context.selectedFrame, props.boothId, wsRequest],
-  );
-
-  // Dispatch the method-selection event FIRST, *then* fire the request — in
-  // that order, not the reverse. The reducer's PAYMENT_QR case only exists
-  // under the PAYMENT/VOUCHER_INPUT states (see state-machine.ts), so if the
-  // CONFIRM_AND_PAY reply's PAYMENT_QR dispatch above landed while still in
-  // KONFIRMASI, the reducer would silently no-op it — the sessionId/qrString
-  // would never make it into context. Dispatching CHOOSE_CASHLESS/
-  // CHOOSE_VOUCHER synchronously up front guarantees we're already in a
-  // PAYMENT_QR-aware state by the time the (inherently async) reply comes
-  // back. If the request fails, requestSession dispatches RESET internally
-  // to bail out cleanly.
-  const handleChooseCashless = useCallback(() => {
-    dispatch({ type: "CHOOSE_CASHLESS" });
-    void requestSession("qris");
-  }, [requestSession]);
-
-  const handleChooseVoucher = useCallback(() => {
-    dispatch({ type: "CHOOSE_VOUCHER" });
-    void requestSession("voucher");
-  }, [requestSession]);
-
-  const handleVoucherRedeemed = useCallback((sessionId: string) => {
-    dispatch({ type: "VOUCHER_REDEEMED", sessionId });
-  }, []);
-
-  const handleCancelPayment = useCallback(() => {
-    if (!confirm(t("kiosk.cancel.confirm"))) return;
-    // Fire-and-forget, same as the old Socket.io emit here: we dispatch
-    // CANCEL locally right away for a snappy UI, regardless of whether the
-    // server round-trip succeeds (BoothDO also pushes RESET back on success,
-    // which the RESET push handler above turns into a harmless no-op re-reset).
-    void wsRequest(SocketEvents.CANCEL, { sessionId: context.sessionId }).catch(() => undefined);
-    dispatch({ type: "CANCEL" });
-  }, [context.sessionId, t, wsRequest]);
-
-  const handleStartCapture = useCallback(() => {
-    if (!context.sessionId) return;
-    // Don't emit START_CAPTURE here — the bridge captures the moment cloud
-    // forwards it, which would fire the shutter ~10s before the guest sees
-    // "CHEESE!" because of the GET_READY pre-phase. Instead, the COUNTDOWN
-    // orchestrator emits it at each photo's CHEESE hold.
-    capturedStepsRef.current.clear();
-    dispatch({ type: "ENTER_COUNTDOWN" });
-  }, [context.sessionId]);
-
-  const handleSubmitContact = useCallback(
-    async ({ phone, email }: { phone: string; email?: string }) => {
-      if (!context.sessionId) return;
-      setBusy(true);
-      try {
-        await wsRequest(SocketEvents.SUBMIT_CONTACT, {
-          sessionId: context.sessionId,
-          phone,
-          email: email ?? "",
-        });
-        dispatch({ type: "CONTACT_SUBMITTED", phone, email });
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Gagal menyimpan");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [context.sessionId, wsRequest],
-  );
-
-  const handleSkipContact = useCallback(() => {
-    dispatch({ type: "PREVIEW_DONE" });
-  }, []);
-
-  // Hide language toggle for immersive states
-  const showLangToggle = !["COUNTDOWN", "PROCESSING", "VOUCHER_INPUT"].includes(state);
-
-  const renderState = useMemo(() => {
-    switch (state) {
-      case "IDLE":
-        return (
-          <IdleState defaultPrice={props.defaultPrice} onStart={handleStart} t={t} />
-        );
-      case "PILIH_FRAME":
-        return (
-          <PilihFrameState
-            frames={frames}
-            onPick={handleFramePicked}
-            onBack={() => dispatch({ type: "BACK" })}
-            t={t}
-          />
-        );
-      case "KONFIRMASI":
-        return context.selectedFrame ? (
-          <KonfirmasiState
-            frame={context.selectedFrame as FrameOption}
-            onBack={() => dispatch({ type: "BACK" })}
-            onChooseCashless={handleChooseCashless}
-            onChooseVoucher={handleChooseVoucher}
-            busy={busy}
-            t={t}
-          />
-        ) : null;
-      case "VOUCHER_INPUT":
-        return (
-          <VoucherInputState
-            sessionId={context.sessionId}
-            boothId={props.boothId}
-            onBack={() => dispatch({ type: "BACK" })}
-            onRedeemed={handleVoucherRedeemed}
-            t={t}
-          />
-        );
-      case "PAYMENT":
-        return (
-          <PaymentState
-            sessionId={context.sessionId}
-            qrString={context.qrString}
-            amount={context.amount}
-            expiresAt={context.paymentExpiresAt}
-            paymentMock={context.paymentMock}
-            onCancel={handleCancelPayment}
-            t={t}
-          />
-        );
-      case "PEMBAYARAN_OK":
-        return <PembayaranOkState onStart={handleStartCapture} t={t} />;
-      case "COUNTDOWN":
-        return (
-          <CountdownState
-            step={context.countdownStep}
-            number={context.countdownNumber}
-            phase={context.countdownPhase}
-            flashing={flashing}
-            t={t}
-          />
-        );
-      case "PROCESSING":
-        return <ProcessingState photos={context.capturedPhotoUrls} t={t} />;
-      case "PREVIEW":
-        return <PreviewState compositeUrl={context.compositeUrl} t={t} />;
-      case "INPUT_KONTAK":
-        return (
-          <InputKontakState
-            onSubmit={handleSubmitContact}
-            onSkip={handleSkipContact}
-            busy={busy}
-            t={t}
-          />
-        );
-      case "DONE":
-        return <DoneState countdown={doneCountdown} t={t} />;
+  // ── Akses staf: 5 tap pojok kiri atas dalam 3 detik ────────────────────
+  const onStaffCorner = useCallback(() => {
+    const now = Date.now();
+    staffTaps.current = [...staffTaps.current.filter((x) => now - x < KIOSK_TIMING.STAFF_TAP_WINDOW_MS), now];
+    if (staffTaps.current.length >= KIOSK_TIMING.STAFF_TAP_COUNT) {
+      staffTaps.current = [];
+      setStaffOpen(true);
     }
-  }, [state, context, frames, busy, flashing, doneCountdown, t, handleStart, handleFramePicked, handleChooseCashless, handleChooseVoucher, handleVoucherRedeemed, handleCancelPayment, handleStartCapture, handleSubmitContact, handleSkipContact, props.defaultPrice, props.boothId]);
+  }, []);
+
+  const onStaffResume = useCallback(() => {
+    const m = machineRef.current;
+    if (m.state !== "CALL_STAFF" || !m.context.sessionId) return;
+    const compose = m.context.callStaffReason === "COMPOSE_FAILED" || m.context.callStaffReason === "COMPOSE_TIMEOUT";
+    composeKey.current = null;
+    dispatch({
+      type: "RESUME",
+      to: compose ? "PROCESSING" : "COUNTDOWN",
+      sessionId: m.context.sessionId,
+      downloadToken: m.context.downloadToken,
+      slot: m.context.slot,
+      thumbs: m.context.thumbs,
+      retakeUsed: m.context.retakeUsed,
+    });
+    setStaffOpen(false);
+  }, [dispatch]);
+
+  // ── Render ─────────────────────────────────────────────────────────────
+  const cameraDown = !health || !health.camera.connected;
+  const blocked = !props.isActive || cameraDown;
+  const lowSupply = !!health && (health.counters.lowPaper || health.counters.lowInk);
+
+  let view: React.ReactNode = null;
+  switch (state) {
+    case "IDLE":
+      view = (
+        <IdleState defaultPrice={props.defaultPrice} onStart={() => dispatch({ type: "TAP_START" })} blocked={blocked} lowSupply={lowSupply} t={t} />
+      );
+      break;
+    case "PILIH_FRAME":
+      view = (
+        <PilihFrameState
+          frames={props.frames}
+          onPick={(frame) => dispatch({ type: "FRAME_PICKED", frame })}
+          onBack={() => dispatch({ type: "BACK" })}
+          t={t}
+        />
+      );
+      break;
+    case "KONFIRMASI":
+      view = context.selectedFrame ? (
+        <KonfirmasiState
+          frame={context.selectedFrame}
+          onBack={() => dispatch({ type: "BACK" })}
+          onChooseCashless={() => void chooseMethod("qris")}
+          onChooseVoucher={() => void chooseMethod("voucher")}
+          busy={busy}
+          t={t}
+        />
+      ) : null;
+      break;
+    case "PAYMENT":
+      view = (
+        <PaymentState
+          sessionId={context.sessionId ?? undefined}
+          qrString={context.qrString ?? undefined}
+          amount={context.amount ?? undefined}
+          expiresAt={context.expiresAt ?? undefined}
+          onCancel={backFromPayment}
+          t={t}
+        />
+      );
+      break;
+    case "VOUCHER_INPUT":
+      view = (
+        <VoucherInputState
+          sessionId={context.sessionId ?? undefined}
+          boothId={props.boothId}
+          onBack={backFromPayment}
+          onRedeemed={(sessionId) => dispatch({ type: "PAYMENT_PAID", sessionId, downloadToken: null })}
+          onWrong={() => dispatch({ type: "VOUCHER_WRONG" })}
+          t={t}
+        />
+      );
+      break;
+    case "PEMBAYARAN_OK":
+      view = <PembayaranOkState onStart={() => void startCapture()} busy={busy} t={t} />;
+      break;
+    case "COUNTDOWN":
+      view = (
+        <CountdownState
+          step={context.slot}
+          number={context.countdown}
+          phase={context.countdownPhase}
+          flashing={flashing}
+          retaking={context.retaking}
+          t={t}
+        />
+      );
+      break;
+    case "REVIEW_SHOT":
+      view = (
+        <ReviewShotState
+          slot={context.slot}
+          thumbUrl={context.thumbs[context.slot - 1] ?? null}
+          canRetake={!context.retakeUsed[context.slot - 1]}
+          secondsLeft={reviewLeft}
+          busy={false}
+          onRetake={() => dispatch({ type: "RETAKE" })}
+          onNext={() => dispatch({ type: "REVIEW_DONE" })}
+          t={t}
+        />
+      );
+      break;
+    case "PROCESSING":
+      view = <ProcessingState photos={context.thumbs.filter((x): x is string => !!x)} t={t} />;
+      break;
+    case "DONE":
+      view = (
+        <DoneState
+          compositeUrl={context.compositeUrl}
+          downloadToken={context.downloadToken}
+          countdown={doneLeft}
+          onFinish={() => dispatch({ type: "RESET" })}
+          t={t}
+        />
+      );
+      break;
+    case "BOOTH_BUSY":
+      view = <BoothBusyState releasesAt={context.busyReleasesAt} onOk={() => dispatch({ type: "RESET" })} t={t} />;
+      break;
+    case "CALL_STAFF":
+      view = <CallStaffState reason={context.callStaffReason} onStaff={() => setStaffOpen(true)} t={t} />;
+      break;
+  }
 
   return (
-    <>
-      {showLangToggle ? <LanguageToggle lang={lang} setLang={setLang} /> : null}
+    <div data-testid="kiosk" data-state={state} data-session-id={context.sessionId ?? ""} className="absolute inset-0">
+      {LANG_TOGGLE_STATES.has(state) ? <LanguageToggle lang={lang} setLang={setLang} /> : null}
       <AnimatePresence mode="wait">
         <motion.div
           key={state}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
+          transition={{ duration: 0.2 }}
           className="absolute inset-0"
         >
-          {renderState}
+          {view}
         </motion.div>
       </AnimatePresence>
-      {context.errorMessage && state === "IDLE" ? (
-        <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-destructive px-4 py-2 text-sm text-white shadow-lg">
-          {context.errorMessage}
-        </div>
+      <button
+        type="button"
+        aria-label="staff"
+        data-testid="staff-corner"
+        onClick={onStaffCorner}
+        className="absolute left-0 top-0 z-40 h-20 w-20 opacity-0"
+      />
+      {staffOpen ? (
+        <StaffPanel
+          sessionId={context.sessionId}
+          onClose={() => setStaffOpen(false)}
+          onResume={onStaffResume}
+          onSessionCancelled={() => {
+            setStaffOpen(false);
+            dispatch({ type: "RESET" });
+          }}
+          t={t}
+        />
       ) : null}
       {!wsConnected ? (
-        <div className="pointer-events-none absolute inset-x-0 top-4 z-50 flex justify-center">
+        <div data-testid="ws-reconnecting" className="pointer-events-none absolute inset-x-0 top-4 z-50 flex justify-center">
           <div className="flex items-center gap-2 rounded-full bg-brand-green-dark px-4 py-2 text-xs font-semibold text-white shadow-lg">
             <span className="h-2 w-2 animate-pulse rounded-full bg-brand-yellow" />
             {t("kiosk.connection.reconnecting")}
           </div>
         </div>
       ) : null}
-    </>
+    </div>
   );
 }

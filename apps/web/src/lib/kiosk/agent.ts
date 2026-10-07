@@ -91,6 +91,13 @@ export const agent = {
   reprint: (token: string, body: ReprintBody) => post<{ jobId: number }>("/print/reprint", body, token),
 };
 
+/** URL aset dari agent (thumb/composite). Path relatif diberi BASE. */
+export function agentAsset(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (/^(https?:|data:|blob:)/.test(url)) return url;
+  return `${BASE}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
 export function agentWsUrl(): string {
   if (BASE) return BASE.replace(/^http/, "ws") + "/agent/ws";
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";

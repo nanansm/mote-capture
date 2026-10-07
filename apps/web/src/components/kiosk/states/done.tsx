@@ -1,57 +1,94 @@
+import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { motion } from "framer-motion";
-import { Sparkles } from "lucide-react";
+import { Printer, Sparkles } from "lucide-react";
 import type { useTranslation } from "@/lib/i18n/use-translation";
 
 type T = ReturnType<typeof useTranslation>["t"];
 
+// Kiosk dilayani agent dari http://localhost, jadi link share harus memakai
+// domain publik. VITE_PUBLIC_URL menimpa default (rig uji / domain lain).
+function publicOrigin(): string {
+  const env = (import.meta.env.VITE_PUBLIC_URL as string | undefined)?.replace(/\/$/, "");
+  if (env) return env;
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") return "https://capture.motekreatif.com";
+  return window.location.origin;
+}
+
+export function shareUrlFor(token: string): string {
+  return `${publicOrigin()}/share/${encodeURIComponent(token)}`;
+}
+
 export function DoneState({
+  compositeUrl,
+  downloadToken,
   countdown,
+  onFinish,
   t,
 }: {
+  compositeUrl: string | null;
+  downloadToken: string | null;
   countdown: number;
+  onFinish: () => void;
   t: T;
 }) {
-  return (
-    <div className="relative flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-brand-yellow/40 via-brand-cream to-brand-green-light/30 px-8 py-6">
-      {/* Confetti sparkles */}
-      {[...Array(14)].map((_, i) => (
-        <motion.div
-          key={i}
-          initial={{ opacity: 0, y: -20, x: (i - 7) * 30, scale: 0.4 }}
-          animate={{ opacity: [0, 1, 0], y: 200 + i * 20 }}
-          transition={{
-            duration: 3,
-            repeat: Infinity,
-            delay: i * 0.18,
-            ease: "easeIn",
-          }}
-          className="pointer-events-none absolute top-10 text-2xl"
-        >
-          {["✨", "🎉", "💛", "📸", "💚"][i % 5]}
-        </motion.div>
-      ))}
+  const shareUrl = downloadToken ? shareUrlFor(downloadToken) : null;
+  const [qr, setQr] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!shareUrl) return;
+    let alive = true;
+    QRCode.toDataURL(shareUrl, { errorCorrectionLevel: "M", margin: 2, width: 360 })
+      .then((url) => {
+        if (alive) setQr(url);
+      })
+      .catch(() => {
+        if (alive) setQr(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [shareUrl]);
+
+  // Background putih polos (tanpa gradient: aturan brand + aman di export).
+  return (
+    <div data-testid="state-done" className="flex h-full w-full flex-col items-center justify-center gap-6 bg-white px-8 py-6 text-center">
       <motion.div
-        initial={{ scale: 0.4, opacity: 0 }}
+        initial={{ scale: 0.6, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ type: "spring", stiffness: 220, damping: 18 }}
-        className="z-10 flex flex-col items-center gap-6 text-center"
+        className="flex items-center gap-4"
       >
-        <div className="rounded-full bg-brand-green-dark p-5 shadow-2xl">
-          <Sparkles className="h-16 w-16 text-brand-yellow" />
+        <div className="rounded-full bg-brand-green-dark p-4 shadow-xl">
+          <Sparkles className="h-10 w-10 text-brand-yellow" />
         </div>
         <h1 className="text-5xl font-extrabold text-brand-green-dark">{t("kiosk.done.title")}</h1>
-        <div className="space-y-1">
-          <p className="text-lg font-semibold text-brand-green-dark">{t("kiosk.done.printed")}</p>
-          <p className="text-base text-brand-green-dark/80">{t("kiosk.done.softfile")}</p>
-          <p className="mt-3 text-sm font-semibold uppercase tracking-[0.2em] text-brand-orange">
-            {t("kiosk.done.tag")}
-          </p>
-        </div>
-        <p className="text-sm text-brand-green-dark/60">
-          {t("kiosk.done.return", { n: countdown })}
-        </p>
       </motion.div>
+      <div className="flex w-full max-w-5xl items-center justify-center gap-10">
+        {compositeUrl ? (
+          <img data-testid="done-composite" src={compositeUrl} alt="" className="max-h-[55vh] rounded-2xl border-8 border-white shadow-2xl" />
+        ) : null}
+        {shareUrl ? (
+          <div className="flex flex-col items-center gap-3">
+            {qr ? <img data-testid="done-qr" data-share-url={shareUrl} src={qr} alt="QR" className="h-64 w-64" /> : null}
+            <p className="max-w-xs text-xl font-semibold text-brand-green-dark">{t("kiosk.done.scan")}</p>
+          </div>
+        ) : null}
+      </div>
+      <p className="inline-flex items-center gap-3 text-xl text-brand-green-dark/80">
+        <Printer className="h-6 w-6" />
+        {t("kiosk.done.printing")}
+      </p>
+      <button
+        type="button"
+        data-testid="done-finish"
+        onClick={onFinish}
+        className="rounded-full bg-brand-green-dark px-12 py-4 text-xl font-bold text-brand-yellow"
+      >
+        {t("kiosk.done.finish")}
+      </button>
+      <p className="text-base text-brand-green-dark/60">{t("kiosk.done.return", { n: countdown })}</p>
     </div>
   );
 }
