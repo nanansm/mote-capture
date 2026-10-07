@@ -1,0 +1,38 @@
+{
+  "name": "booth-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent mini PC booth Mote Capture: kamera, compose, cetak, antrean upload, proxy ke Workers (PRD bagian 9)",
+  "scripts": {
+    "build": "esbuild src/main.ts src/cli.ts --bundle --platform=node --target=node22 --format=esm --outdir=dist --external:better-sqlite3 --external:sharp --external:@node-rs/argon2 --external:fastify --external:@fastify/* --external:ws --banner:js=\"import {createRequire} from 'module';const require=createRequire(import.meta.url);\"",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "set-pin": "node dist/cli.js set-pin",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@capture/shared": "workspace:*",
+    "@fastify/http-proxy": "^11",
+    "@fastify/static": "^8",
+    "@fastify/websocket": "^11",
+    "@node-rs/argon2": "^2",
+    "better-sqlite3": "^12",
+    "fastify": "^5",
+    "sharp": "^0.34",
+    "ws": "^8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.24",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.0"
+  },
+  "bin": {
+    "booth-agent": "dist/cli.js"
+  }
+}
