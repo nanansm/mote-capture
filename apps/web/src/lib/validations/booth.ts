@@ -20,7 +20,6 @@ export const boothInputSchema = z.object({
 
 export const boothUpdateSchema = boothInputSchema.partial().extend({
   regenerateBridgeToken: z.boolean().optional(),
-  useMockBridge: z.boolean().optional(),
 });
 
 export type BoothInputForm = z.infer<typeof boothInputSchema>;

@@ -88,7 +88,6 @@ export function BoothLiveStatus({
   const connected = Boolean(live?.online ?? live?.bridgeOnline);
   const inSession = Boolean(live?.inSession);
   const sessionId = live?.activeSessionId;
-  const useMockBridge = (metadata?.use_mock_bridge as boolean | undefined) ?? true;
 
   // Heartbeat metadata older than the valid window is treated as unknown so
   // the camera/printer status doesn't lie about being connected after the
@@ -149,11 +148,6 @@ export function BoothLiveStatus({
               Last seen {formatDate(lastSeenAt)}
             </span>
           ) : null}
-          {useMockBridge ? (
-            <Badge variant="outline">🧪 Mock Bridge</Badge>
-          ) : (
-            <Badge variant="warn">🔌 Real Bridge</Badge>
-          )}
         </div>
 
         <div className="grid gap-2 text-sm sm:grid-cols-2">
