@@ -106,6 +106,12 @@ test("QRIS happy path: frame, bayar, 4 foto + 1 retake, compose, done", async ({
   expect(paths.filter((p) => /\/retake$/.test(p))).toHaveLength(1);
   expect(log.find((l) => l.path === "done")?.status).toBe(200);
   expect(sid).toMatch(/^SES-/);
+  // Antrean agent tuntas: done + composite + 4 foto + print-status sampai cloud.
+  await expect
+    .poll(async () => ((await (await request.get(`${AGENT}/health`)).json()) as { queue: { pending: number; failed: number } }).queue, {
+      timeout: 30_000,
+    })
+    .toEqual({ pending: 0, failed: 0 });
 
   await page.getByTestId("done-finish").click();
   await expectState(page, "IDLE");
