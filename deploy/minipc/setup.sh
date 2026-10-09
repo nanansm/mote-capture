@@ -56,6 +56,15 @@ step "cegah layanan yang merebut kamera/printer USB"
 apt-get purge -y -qq gvfs-backends gvfs-gphoto2-volume-monitor ipp-usb >/dev/null 2>&1 || true
 systemctl mask --now ipp-usb.service >/dev/null 2>&1 || true
 
+step "jaringan: tunggu online sebelum agent/kiosk start"
+# Installer Debian memasang LAN sebagai allow-hotplug: network-online.target
+# lolos sebelum DHCP/DNS siap -> agent EAI_AGAIN + kiosk "Booth tidak bisa
+# dibuka (INTERNAL)" saat boot. auto + ifupdown-wait-online menahan sampai siap.
+if [ -f /etc/network/interfaces ]; then
+  sed -i -E 's/^allow-hotplug (en[a-z0-9]+|eth[0-9]+)$/auto \1/' /etc/network/interfaces
+  systemctl enable ifupdown-wait-online.service >/dev/null 2>&1 || true
+fi
+
 step "Node.js $NODE_VERSION"
 NODE_ARCH=$([ "$ARCH" = amd64 ] && echo x64 || echo arm64)
 if [ "$(/opt/node/bin/node -v 2>/dev/null)" != "v$NODE_VERSION" ]; then
