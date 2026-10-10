@@ -26,6 +26,8 @@ export const booths = sqliteTable(
     lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }),
     metadata: text("metadata", { mode: "json" }).default(sql`'{}'`),
     paymentCredentials: text("payment_credentials", { mode: "json" }).default(sql`'{}'`),
+    // Akun pembayaran (migrations/0003). NULL = QRIS belum diatur.
+    paymentAccountId: text("payment_account_id"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(now),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(now),
   },
@@ -35,6 +37,29 @@ export const booths = sqliteTable(
 );
 
 export type BoothRow = typeof booths.$inferSelect;
+
+// Akun Xendit/iPaymu yang bisa dipilih per booth (migrations/0003).
+// `credentials` = amplop AES-GCM (lib/secret-box.ts) berisi JSON.
+export const paymentAccounts = sqliteTable(
+  "payment_accounts",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    provider: text("provider").notNull(),
+    mode: text("mode").notNull().default("production"),
+    credentials: text("credentials").notNull(),
+    lastTestAt: integer("last_test_at", { mode: "timestamp_ms" }),
+    lastTestOk: integer("last_test_ok", { mode: "boolean" }),
+    lastTestMessage: text("last_test_message"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(now),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(now),
+  },
+  (table) => ({
+    providerIdx: index("idx_payment_accounts_provider").on(table.provider),
+  }),
+);
+
+export type PaymentAccountRow = typeof paymentAccounts.$inferSelect;
 export type BoothInsert = typeof booths.$inferInsert;
 
 export const frames = sqliteTable(
@@ -85,6 +110,8 @@ export const sessions = sqliteTable(
     amount: integer("amount").notNull(),
     paymentProvider: text("payment_provider"),
     paymentRef: text("payment_ref"),
+    // Akun yang membuat QR sesi ini; webhook memverifikasi dengan akun ini.
+    paymentAccountId: text("payment_account_id"),
     qrString: text("qr_string"),
     paidAt: integer("paid_at", { mode: "timestamp_ms" }),
     customerEmail: text("customer_email"),

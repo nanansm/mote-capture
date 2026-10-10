@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import type { Booth } from "@capture/shared";
-import { PAYMENT_PROVIDERS } from "@capture/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,7 +15,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { boothInputSchema } from "@/lib/validations/booth";
+import { accountStatus, providerLabel, usePaymentAccounts } from "@/components/admin/payment-accounts";
+
+const NO_ACCOUNT = "__none__";
 
 type Mode = "create" | "edit";
 
@@ -33,9 +36,9 @@ export function BoothForm({
   const [defaultPrice, setDefaultPrice] = useState<number>(
     initial?.defaultPrice ?? 30000,
   );
-  const [paymentProvider, setPaymentProvider] = useState<"ipaymu" | "xendit">(
-    (initial?.paymentProvider as "ipaymu" | "xendit") ?? "ipaymu",
-  );
+  const [paymentAccountId, setPaymentAccountId] = useState<string | null>(initial?.paymentAccountId ?? null);
+  const { accounts } = usePaymentAccounts();
+  const selectedAccount = accounts?.find((a) => a.id === paymentAccountId) ?? null;
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
   const [bridgeToken, setBridgeToken] = useState(initial?.bridgeToken ?? "(otomatis dibuat saat simpan)");
   const [submitting, setSubmitting] = useState(false);
@@ -46,7 +49,7 @@ export function BoothForm({
       name: name.trim(),
       location: location.trim() || null,
       defaultPrice: Number(defaultPrice),
-      paymentProvider,
+      paymentAccountId,
       isActive,
     };
     const parsed = boothInputSchema.safeParse(payload);
@@ -141,26 +144,51 @@ export function BoothForm({
                 required
               />
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="paymentProvider">
-                Payment Provider <span className="text-destructive">*</span>
-              </Label>
-              <Select
-                value={paymentProvider}
-                onValueChange={(v) => setPaymentProvider(v as "ipaymu" | "xendit")}
-              >
-                <SelectTrigger id="paymentProvider">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PAYMENT_PROVIDERS.map((p) => (
-                    <SelectItem key={p.value} value={p.value}>
-                      {p.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="paymentAccount">Akun pembayaran QRIS</Label>
+            <Select
+              value={paymentAccountId ?? NO_ACCOUNT}
+              onValueChange={(v) => setPaymentAccountId(v === NO_ACCOUNT ? null : v)}
+            >
+              <SelectTrigger id="paymentAccount">
+                <SelectValue placeholder={accounts === null ? "Memuat…" : "Pilih akun"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_ACCOUNT}>Belum pakai QRIS (voucher saja)</SelectItem>
+                {(accounts ?? []).map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name} · {providerLabel(a.provider)}
+                    {a.mode === "sandbox" ? " · Sandbox" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {selectedAccount ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant={accountStatus(selectedAccount).variant}>{accountStatus(selectedAccount).label}</Badge>
+                {selectedAccount.mode === "sandbox" ? (
+                  <span className="rounded-md border border-destructive/40 bg-destructive/5 px-2 py-1 text-destructive">
+                    Mode Sandbox (uji coba): pembeli sungguhan TIDAK bisa bayar. Pakai hanya untuk tes, ganti ke akun
+                    Production sebelum booth dibuka.
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">Uang masuk ke akun {selectedAccount.name}.</span>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Tanpa akun, tombol bayar QRIS di kiosk ditolak; voucher tetap jalan.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Akun dibuat di{" "}
+              <Link to="/admin/payments" className="underline">
+                Payments
+              </Link>
+              . Perubahan berlaku mulai sesi berikutnya.
+            </p>
           </div>
 
           <div className="flex items-center justify-between rounded-md border border-input p-3">

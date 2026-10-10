@@ -1,15 +1,12 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { getDb } from "@/db";
-import { setSetting, invalidateSettingsCache } from "@/lib/settings";
-import { encryptSecret } from "@/lib/secret-box";
 import {
   ipaymuCallbackString,
   ipaymuRequestSignature,
   verifyIpaymuCallbackSignature,
   IpaymuProvider,
 } from "@/lib/payment/ipaymu";
-import { getSessionRow, seedBooth, seedSession, uid } from "./helpers";
+import { getSessionRow, seedBooth, seedPaymentAccount, seedSession, uid } from "./helpers";
 
 const VA = "1179000899";
 const KEY = "KEY-TEST.abc";
@@ -100,29 +97,16 @@ describe("iPaymu signature", () => {
 });
 
 describe("POST /api/webhook/ipaymu", () => {
+  const ACC = "PAY-IPAYMU-A";
   beforeAll(async () => {
-    const pass = env.SETTINGS_ENC_KEY as string;
-    const db = getDb(env.DB);
-    await setSetting(db, "credentials", {
-      xendit_secret_key: "",
-      xendit_webhook_token: "",
-      evolution_api_url: "",
-      evolution_api_key: "",
-      evolution_instance_name: "",
-      ipaymu_va: await encryptSecret(VA, pass),
-      ipaymu_api_key: await encryptSecret(KEY, pass),
-      ipaymu_mode: await encryptSecret("sandbox", pass),
-    });
-    invalidateSettingsCache();
+    await seedPaymentAccount({ id: ACC, provider: "ipaymu", mode: "sandbox", secrets: { va: VA, apiKey: KEY } });
   });
 
   afterEach(() => vi.restoreAllMocks());
 
   async function seedIpaymuSession(status = "payment", trxId = "5001", amount = 30000) {
     const boothId = await seedBooth({ id: uid("BTH") });
-    const sessionId = await seedSession({ boothId, status, amount, paymentRef: trxId });
-    await env.DB.prepare("UPDATE sessions SET payment_provider = 'ipaymu' WHERE id = ?").bind(sessionId).run();
-    return sessionId;
+    return seedSession({ boothId, status, amount, paymentRef: trxId, provider: "ipaymu", accountId: ACC });
   }
 
   function mockCheck(data: Record<string, unknown>) {
@@ -132,8 +116,8 @@ describe("POST /api/webhook/ipaymu", () => {
     });
   }
 
-  const callback = (body: Record<string, string>) =>
-    SELF.fetch("https://capture.test/api/webhook/ipaymu", {
+  const callback = (body: Record<string, string>, path = `/api/webhook/ipaymu/${ACC}`) =>
+    SELF.fetch(`https://capture.test${path}`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(body).toString(),
@@ -195,5 +179,32 @@ describe("POST /api/webhook/ipaymu", () => {
     mockCheck({ TransactionId: 5003, ReferenceId: sid, Status: 1, Amount: 30000 });
     const res = await callback({ trx_id: "5003", reference_id: sid });
     expect(await res.json()).toMatchObject({ latePayment: true });
+  });
+
+  it("URL tanpa id akun: akun diambil dari sesi", async () => {
+    const sid = await seedIpaymuSession("payment", "5010");
+    mockCheck({ TransactionId: 5010, ReferenceId: sid, Status: 1, Amount: 30000 });
+    const res = await callback({ trx_id: "5010", reference_id: sid }, "/api/webhook/ipaymu");
+    expect(res.status).toBe(200);
+    expect(["paid", "capturing"]).toContain((await getSessionRow(sid))?.status);
+  });
+
+  it("akun iPaymu lain tidak bisa melunasi sesi akun A", async () => {
+    const other = await seedPaymentAccount({ provider: "ipaymu", mode: "sandbox", secrets: { va: "1179000111", apiKey: "KEY-B" } });
+    const sid = await seedIpaymuSession("payment", "5011");
+    mockCheck({ TransactionId: 5011, ReferenceId: sid, Status: 1, Amount: 30000 });
+    const res = await callback({ trx_id: "5011", reference_id: sid }, `/api/webhook/ipaymu/${other}`);
+    expect(await res.json()).toMatchObject({ message: "account mismatch" });
+    expect((await getSessionRow(sid))?.status).toBe("payment");
+  });
+
+  it("Check Transaction memakai VA akun sesi", async () => {
+    const sid = await seedIpaymuSession("payment", "5012");
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_i, init) => {
+      expect(new Headers(init?.headers).get("va")).toBe(VA);
+      return Response.json({ Status: 200, Data: { TransactionId: 5012, ReferenceId: sid, Status: 1, Amount: 30000 } });
+    });
+    await callback({ trx_id: "5012", reference_id: sid });
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

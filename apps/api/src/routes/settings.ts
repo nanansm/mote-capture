@@ -16,10 +16,7 @@
 //     works without a domain being configured yet.
 //   - whatsapp: same Evolution API instance-connection-state check as
 //     apps/cloud/lib/wa/evolution.ts:77-116, ported to `fetch`.
-//   - xendit: same GET /balance ping as
-//     apps/cloud/lib/payment/providers/xendit.ts:141-157, with
-//     `Buffer.from(...).toString("base64")` replaced by `btoa` for the
-//     Basic-auth header (Workers have no `Buffer`).
+// Tes koneksi Xendit/iPaymu pindah ke /api/payment-accounts/:id/test (per akun).
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Bindings } from "@/lib/env";
@@ -31,7 +28,6 @@ import { getAllSettings, getSetting, setSetting, type SettingMap } from "@/lib/s
 import { decryptSecret, encryptSecret, maskSecret } from "@/lib/secret-box";
 import { credentialSource, resolveCredentials, type CredentialSource } from "@/lib/runtime-credentials";
 import { logger } from "@/lib/logger";
-import { IpaymuProvider } from "@/lib/payment";
 
 const settings = new Hono<{ Bindings: Bindings; Variables: AdminVariables }>();
 
@@ -46,33 +42,16 @@ const patchBodySchema = z.object({
 // they need encrypting on the way in, and a blank field has to mean "keep the
 // existing value" rather than "clear it" (the UI can't echo the current one
 // back for the user to retype).
-const CREDENTIAL_FIELDS = [
-  "xendit_secret_key",
-  "xendit_webhook_token",
-  "evolution_api_url",
-  "evolution_api_key",
-  "evolution_instance_name",
-  "ipaymu_va",
-  "ipaymu_api_key",
-  "ipaymu_mode",
-] as const;
+// Kredensial pembayaran TIDAK di sini: per akun, lihat routes/payment-accounts.ts.
+const CREDENTIAL_FIELDS = ["evolution_api_url", "evolution_api_key", "evolution_instance_name"] as const;
 
 // Nilai yang bukan rahasia, ditampilkan utuh di panel supaya salah isi mudah terlihat.
-const PLAIN_FIELDS = new Set<string>(["evolution_api_url", "evolution_instance_name", "ipaymu_mode"]);
+const PLAIN_FIELDS = new Set<string>(["evolution_api_url", "evolution_instance_name"]);
 
 const credentialsBodySchema = z.object({
-  xendit_secret_key: z.string().max(500).optional(),
-  xendit_webhook_token: z.string().max(500).optional(),
   evolution_api_url: z.string().max(500).optional(),
   evolution_api_key: z.string().max(500).optional(),
   evolution_instance_name: z.string().max(200).optional(),
-  ipaymu_va: z
-    .string()
-    .max(40)
-    .regex(/^\s*\d*\s*$/, "VA iPaymu hanya angka")
-    .optional(),
-  ipaymu_api_key: z.string().max(200).optional(),
-  ipaymu_mode: z.union([z.enum(["production", "sandbox"]), z.literal("")]).optional(),
   // Explicit opt-in to wipe a stored value and fall back to the Worker secret.
   clear: z.array(z.enum(CREDENTIAL_FIELDS)).optional(),
 });
@@ -88,15 +67,9 @@ settings.get("/", async (c) => {
   const stored = all.credentials;
   const passphrase = c.env.SETTINGS_ENC_KEY;
   const envFallback: Record<(typeof CREDENTIAL_FIELDS)[number], string | undefined> = {
-    xendit_secret_key: env.XENDIT_SECRET_KEY,
-    xendit_webhook_token: env.XENDIT_WEBHOOK_TOKEN,
     evolution_api_url: env.EVOLUTION_API_URL,
     evolution_api_key: env.EVOLUTION_API_KEY,
     evolution_instance_name: env.EVOLUTION_INSTANCE_NAME,
-    // iPaymu hanya dari panel ini, tanpa Worker secret.
-    ipaymu_va: undefined,
-    ipaymu_api_key: undefined,
-    ipaymu_mode: undefined,
   };
 
   const credentials: Record<string, { masked: string; source: CredentialSource }> = {};
@@ -171,7 +144,7 @@ settings.patch("/credentials", async (c) => {
     }
     const incoming = parsed.data[field];
     // Blank/absent = leave the stored value alone. This is what lets the admin
-    // rotate only the Xendit key without re-typing the Evolution credentials.
+    // rotate only the API key without re-typing the URL/instance.
     if (incoming === undefined || incoming.trim() === "") continue;
     next[field] = await encryptSecret(incoming.trim(), passphrase);
     changed.push(field);
@@ -207,13 +180,10 @@ settings.patch("/", async (c) => {
 });
 
 const testConnectionBodySchema = z.object({
-  service: z.enum(["email", "whatsapp", "xendit", "ipaymu"]),
+  service: z.enum(["email", "whatsapp"]),
   to: z.string().email().optional(),
 });
 
-function basicAuthHeader(secretKey: string): string {
-  return "Basic " + btoa(`${secretKey}:`);
-}
 
 settings.post("/test-connection", async (c) => {
   let json: unknown;
@@ -311,47 +281,6 @@ settings.post("/test-connection", async (c) => {
       const message = err instanceof Error ? err.message : "Network error";
       return c.json({ success: false, message, details: { connected: false, status: "error" } });
     }
-  }
-
-  if (service === "xendit") {
-    const secretKey = resolved.xendit.secretKey;
-    if (!secretKey) {
-      return c.json({
-        success: false,
-        message: resolved.hasUndecryptable
-          ? "Xendit key tersimpan tapi tidak bisa dibuka — SETTINGS_ENC_KEY berubah/hilang. Isi ulang dari halaman ini."
-          : "Xendit secret key belum diisi (mock mode aktif).",
-      });
-    }
-    try {
-      const res = await fetch("https://api.xendit.co/balance", {
-        headers: { authorization: basicAuthHeader(secretKey) },
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        return c.json({
-          success: false,
-          message: `Xendit responded ${res.status}: ${text.slice(0, 120)}`,
-        });
-      }
-      return c.json({ success: true, message: "Xendit credentials valid" });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      return c.json({ success: false, message });
-    }
-  }
-
-  if (service === "ipaymu") {
-    if (!resolved.ipaymu.va || !resolved.ipaymu.apiKey) {
-      return c.json({
-        success: false,
-        message: resolved.hasUndecryptable
-          ? "Kredensial iPaymu tersimpan tapi tidak bisa dibuka — isi ulang dari halaman ini."
-          : "VA / API Key iPaymu belum diisi.",
-      });
-    }
-    const result = await new IpaymuProvider(resolved.ipaymu).ping();
-    return c.json({ success: result.ok, message: result.message });
   }
 
   return c.json({ error: "Service tidak dikenal" }, 400);

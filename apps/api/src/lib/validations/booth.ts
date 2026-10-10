@@ -14,9 +14,9 @@ export const boothInputSchema = z.object({
     .number({ invalid_type_error: "Harga harus berupa angka" })
     .int("Harga harus bilangan bulat")
     .min(1000, "Harga minimal Rp1.000"),
-  paymentProvider: z.enum(["ipaymu", "xendit"], {
-    errorMap: () => ({ message: "Provider pembayaran tidak valid" }),
-  }),
+  // Booth memilih akun pembayaran (routes/payment-accounts.ts); provider
+  // diturunkan dari akun di server. null = QRIS belum diatur.
+  paymentAccountId: z.string().max(40).nullable().optional(),
   isActive: z.boolean(),
 });
 

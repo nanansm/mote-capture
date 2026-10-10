@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { DEFAULT_LAYOUT_V2 } from "@capture/shared";
+import { encryptSecret } from "@/lib/secret-box";
 
 // Seed helpers. Raw SQL ke D1 lokal (Miniflare), skema dari migrations/.
 // Tiap test file dapat D1 terisolasi, jadi id tetap aman dipakai ulang.
@@ -19,6 +20,29 @@ export async function seedBooth(over: Partial<{ id: string; isActive: boolean; t
     .bind(id, `Booth ${id}`, over.token ?? `${BRIDGE_TOKEN}-${id}`, over.isActive === false ? 0 : 1)
     .run();
   return id;
+}
+
+// Akun pembayaran terenkripsi (format sama dengan lib/payment-accounts.ts).
+export async function seedPaymentAccount(over: {
+  id?: string;
+  provider: "xendit" | "ipaymu";
+  mode?: "production" | "sandbox";
+  secrets: Record<string, string>;
+}) {
+  const id = over.id ?? uid("PAY");
+  const sealed = await encryptSecret(JSON.stringify(over.secrets), env.SETTINGS_ENC_KEY as string);
+  await env.DB.prepare(
+    `INSERT INTO payment_accounts (id, name, provider, mode, credentials) VALUES (?, ?, ?, ?, ?)`,
+  )
+    .bind(id, `Akun ${id}`, over.provider, over.mode ?? "production", sealed)
+    .run();
+  return id;
+}
+
+export async function useAccount(boothId: string, accountId: string | null, provider = "xendit") {
+  await env.DB.prepare("UPDATE booths SET payment_account_id = ?, payment_provider = ? WHERE id = ?")
+    .bind(accountId, provider, boothId)
+    .run();
 }
 
 export async function seedFrame(
@@ -52,18 +76,22 @@ export async function seedSession(
     createdAt: number;
     metadata: Record<string, unknown>;
     downloadToken: string | null;
+    provider: string;
+    accountId: string | null;
   }> = {},
 ) {
   const id = over.id ?? uid("SES");
   await env.DB.prepare(
-    `INSERT INTO sessions (id, booth_id, status, amount, payment_provider, payment_ref, paid_at, metadata, created_at, download_token)
-     VALUES (?, ?, ?, ?, 'xendit', ?, ?, ?, ?, ?)`,
+    `INSERT INTO sessions (id, booth_id, status, amount, payment_provider, payment_account_id, payment_ref, paid_at, metadata, created_at, download_token)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       over.boothId ?? BOOTH_ID,
       over.status ?? "payment",
       over.amount ?? 30000,
+      over.provider ?? "xendit",
+      over.accountId ?? null,
       over.paymentRef === undefined ? `ref-${id}` : over.paymentRef,
       over.paidAt ?? null,
       JSON.stringify(over.metadata ?? {}),

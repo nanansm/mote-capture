@@ -17,6 +17,20 @@ import { logger } from "@/lib/logger";
 
 const booths = new Hono<{ Bindings: Bindings; Variables: AdminVariables }>();
 
+// Akun harus ada; provider booth disalin dari akun supaya daftar booth/sesi
+// tetap menampilkan provider tanpa join.
+async function accountFields(db: ReturnType<typeof getDb>, accountId: string | null | undefined) {
+  if (accountId === undefined) return { ok: true as const, fields: {} };
+  if (accountId === null || accountId === "") return { ok: true as const, fields: { paymentAccountId: null } };
+  const [acc] = await db
+    .select({ id: schema.paymentAccounts.id, provider: schema.paymentAccounts.provider })
+    .from(schema.paymentAccounts)
+    .where(eq(schema.paymentAccounts.id, accountId))
+    .limit(1);
+  if (!acc) return { ok: false as const, error: "Akun pembayaran tidak ditemukan" };
+  return { ok: true as const, fields: { paymentAccountId: acc.id, paymentProvider: acc.provider } };
+}
+
 booths.use("*", requireAdmin);
 
 booths.get("/", async (c) => {
@@ -41,6 +55,8 @@ booths.post("/", async (c) => {
   const bridgeToken = generateBridgeToken();
   const data = parsed.data;
   const db = getDb(c.env.DB);
+  const acc = await accountFields(db, data.paymentAccountId ?? null);
+  if (!acc.ok) return c.json({ error: acc.error }, 400);
 
   const [created] = await db
     .insert(schema.booths)
@@ -49,9 +65,9 @@ booths.post("/", async (c) => {
       name: data.name,
       location: data.location,
       defaultPrice: data.defaultPrice,
-      paymentProvider: data.paymentProvider,
       bridgeToken,
       isActive: data.isActive,
+      ...acc.fields,
     })
     .returning();
 
@@ -79,11 +95,14 @@ booths.patch("/:id", async (c) => {
   if (!parsed.success) {
     return c.json({ error: parsed.error.issues[0]?.message ?? "Validasi gagal" }, 400);
   }
-  const { regenerateBridgeToken, ...rest } = parsed.data;
+  const { regenerateBridgeToken, paymentAccountId, ...rest } = parsed.data;
   const db = getDb(c.env.DB);
+  const acc = await accountFields(db, paymentAccountId);
+  if (!acc.ok) return c.json({ error: acc.error }, 400);
 
   const updates: Partial<typeof schema.booths.$inferInsert> = {
     ...rest,
+    ...acc.fields,
     updatedAt: new Date(),
   };
   if (regenerateBridgeToken) {
@@ -99,6 +118,7 @@ booths.patch("/:id", async (c) => {
   if (!updated) return c.json({ error: "Booth tidak ditemukan" }, 404);
   logger.info("booth_updated", {
     id,
+    paymentAccountId: updates.paymentAccountId,
     regen: !!regenerateBridgeToken,
   });
   return c.json({ data: updated });

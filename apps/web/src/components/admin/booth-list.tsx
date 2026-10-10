@@ -16,6 +16,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { formatRupiah, formatDate } from "@/lib/utils";
 import { useAdminBoothStatuses } from "@/lib/ws/use-admin-booth-statuses";
+import { usePaymentAccounts } from "@/components/admin/payment-accounts";
 
 export function BoothList({ booths }: { booths: Booth[] }) {
   // Owns a local copy of the list so a delete can drop the row in place —
@@ -28,6 +29,7 @@ export function BoothList({ booths }: { booths: Booth[] }) {
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const liveStatuses = useAdminBoothStatuses();
+  const { accounts } = usePaymentAccounts();
 
   async function handleDelete(b: Booth) {
     if (!confirm(`Hapus booth "${b.name}"? Tindakan tidak bisa dibatalkan.`)) return;
@@ -68,7 +70,7 @@ export function BoothList({ booths }: { booths: Booth[] }) {
             <TableHead>Nama</TableHead>
             <TableHead className="hidden md:table-cell">Lokasi</TableHead>
             <TableHead>Harga</TableHead>
-            <TableHead className="hidden lg:table-cell">Provider</TableHead>
+            <TableHead className="hidden lg:table-cell">Akun pembayaran</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Live</TableHead>
             <TableHead className="hidden xl:table-cell">Dibuat</TableHead>
@@ -96,7 +98,19 @@ export function BoothList({ booths }: { booths: Booth[] }) {
               </TableCell>
               <TableCell className="hidden md:table-cell">{b.location ?? "-"}</TableCell>
               <TableCell>{formatRupiah(b.defaultPrice)}</TableCell>
-              <TableCell className="hidden lg:table-cell capitalize">{b.paymentProvider}</TableCell>
+              <TableCell className="hidden lg:table-cell">
+                {(() => {
+                  const acc = accounts?.find((a) => a.id === b.paymentAccountId);
+                  if (!b.paymentAccountId) return <Badge variant="warn">Belum diatur</Badge>;
+                  if (!acc) return "…";
+                  return (
+                    <span>
+                      {acc.name}
+                      {acc.mode === "sandbox" ? <span className="text-destructive"> · Sandbox</span> : null}
+                    </span>
+                  );
+                })()}
+              </TableCell>
               <TableCell>
                 {b.isActive ? (
                   <Badge variant="success">Aktif</Badge>

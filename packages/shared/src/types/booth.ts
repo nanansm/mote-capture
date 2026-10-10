@@ -3,7 +3,10 @@ export type Booth = {
   name: string;
   location: string | null;
   defaultPrice: number;
+  // Diturunkan dari akun pembayaran booth; jangan diubah langsung.
   paymentProvider: "ipaymu" | "xendit";
+  // null = QRIS belum diatur (booth hanya bisa voucher).
+  paymentAccountId: string | null;
   bridgeToken: string;
   isActive: boolean;
   lastSeenAt: Date | null;
@@ -16,6 +19,6 @@ export type BoothInput = {
   name: string;
   location?: string | null;
   defaultPrice: number;
-  paymentProvider: "ipaymu" | "xendit";
+  paymentAccountId?: string | null;
   isActive: boolean;
 };

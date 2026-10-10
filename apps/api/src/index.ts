@@ -19,6 +19,7 @@ import shareRoutes from "@/routes/share";
 import uploadRoutes from "@/routes/upload";
 import { adminVoucherRoutes, publicVoucherRoutes } from "@/routes/voucher";
 import webhookRoutes from "@/routes/webhook";
+import paymentAccountRoutes from "@/routes/payment-accounts";
 import { handleScheduled } from "@/scheduled";
 
 export { BoothDO } from "@/do/booth";
@@ -35,6 +36,7 @@ app.route("/api/booths", boothsRoutes);
 app.route("/api/frames", framesRoutes);
 app.route("/api/kiosk", kioskRoutes);
 app.route("/api/settings", settingsRoutes);
+app.route("/api/payment-accounts", paymentAccountRoutes);
 app.route("/api/upload", uploadRoutes);
 app.route("/api/admin/voucher", adminVoucherRoutes);
 app.route("/api/voucher", publicVoucherRoutes);

@@ -1,13 +1,18 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
-import { getSessionRow, seedBooth, seedSession, uid } from "./helpers";
+import { beforeAll, describe, expect, it } from "vitest";
+import { getSessionRow, seedBooth, seedPaymentAccount, seedSession, uid } from "./helpers";
 
 // U3 (PRD bagian 13): webhook PAID setelah expired -> voucher auto-late-payment, 200.
 
 const TOKEN = "test-webhook-token";
+const ACC = "PAY-XENDIT-A";
 
-const paidWebhook = (sessionId: string, amount = 30000, token = TOKEN) =>
-  SELF.fetch("https://capture.test/api/webhook/xendit", {
+beforeAll(async () => {
+  await seedPaymentAccount({ id: ACC, provider: "xendit", secrets: { secretKey: "xnd_development_a", webhookToken: TOKEN } });
+});
+
+const paidWebhook = (sessionId: string, amount = 30000, token = TOKEN, path = `/api/webhook/xendit/${ACC}`) =>
+  SELF.fetch(`https://capture.test${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-callback-token": token },
     body: JSON.stringify({
@@ -102,5 +107,47 @@ describe("U3 webhook PAID setelah expired", () => {
     });
     expect(res.status).toBe(200);
     expect((await getSessionRow(next))?.status).toBe("paid");
+  });
+});
+
+describe("akun Xendit per booth", () => {
+  const TOKEN_B = "token-akun-b-berbeda";
+  const ACC_B = "PAY-XENDIT-B";
+  beforeAll(async () => {
+    await seedPaymentAccount({ id: ACC_B, provider: "xendit", secrets: { secretKey: "xnd_development_b", webhookToken: TOKEN_B } });
+  });
+
+  it("token akun B tidak bisa melunasi lewat URL akun A (401)", async () => {
+    const boothId = await seedBooth({ id: uid("BTH") });
+    const sid = await seedSession({ boothId, status: "payment", accountId: ACC });
+    expect((await paidWebhook(sid, 30000, TOKEN_B)).status).toBe(401);
+    expect((await getSessionRow(sid))?.status).toBe("payment");
+  });
+
+  it("callback sah akun B untuk sesi milik akun A ditolak (account mismatch)", async () => {
+    const boothId = await seedBooth({ id: uid("BTH") });
+    const sid = await seedSession({ boothId, status: "payment", accountId: ACC });
+    const res = await paidWebhook(sid, 30000, TOKEN_B, `/api/webhook/xendit/${ACC_B}`);
+    expect(await res.json()).toMatchObject({ message: "account mismatch" });
+    expect((await getSessionRow(sid))?.status).toBe("payment");
+  });
+
+  it("URL lama tanpa id akun: token dicocokkan ke akun yang benar", async () => {
+    const boothId = await seedBooth({ id: uid("BTH") });
+    const sid = await seedSession({ boothId, status: "payment", accountId: ACC_B });
+    expect((await paidWebhook(sid, 30000, TOKEN_B, "/api/webhook/xendit")).status).toBe(200);
+    expect((await getSessionRow(sid))?.status).toBe("paid");
+  });
+
+  it("URL lama, token tidak cocok akun mana pun: 401", async () => {
+    const boothId = await seedBooth({ id: uid("BTH") });
+    const sid = await seedSession({ boothId, status: "payment", accountId: ACC });
+    expect((await paidWebhook(sid, 30000, "z".repeat(TOKEN.length), "/api/webhook/xendit")).status).toBe(401);
+  });
+
+  it("id akun tidak dikenal: 401", async () => {
+    const boothId = await seedBooth({ id: uid("BTH") });
+    const sid = await seedSession({ boothId, status: "payment", accountId: ACC });
+    expect((await paidWebhook(sid, 30000, TOKEN, "/api/webhook/xendit/PAY-TIDAKADA")).status).toBe(401);
   });
 });

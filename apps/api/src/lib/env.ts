@@ -9,8 +9,6 @@ export type Secrets = {
   ADMIN_EMAIL: string;
   ADMIN_PASSWORD: string;
   BETTER_AUTH_SECRET: string;
-  XENDIT_SECRET_KEY: string;
-  XENDIT_WEBHOOK_TOKEN: string;
   RESEND_API_KEY: string;
   EVOLUTION_API_URL: string;
   EVOLUTION_API_KEY: string;
@@ -45,8 +43,6 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().optional(),
   ADMIN_PASSWORD: z.string().optional(),
   BETTER_AUTH_SECRET: z.string().optional(),
-  XENDIT_SECRET_KEY: z.string().optional(),
-  XENDIT_WEBHOOK_TOKEN: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
   EVOLUTION_API_URL: z.string().optional(),
   EVOLUTION_API_KEY: z.string().optional(),

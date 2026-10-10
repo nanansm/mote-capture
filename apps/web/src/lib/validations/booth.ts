@@ -12,9 +12,7 @@ export const boothInputSchema = z.object({
     .number({ invalid_type_error: "Harga harus berupa angka" })
     .int("Harga harus bilangan bulat")
     .min(1000, "Harga minimal Rp1.000"),
-  paymentProvider: z.enum(["ipaymu", "xendit"], {
-    errorMap: () => ({ message: "Provider pembayaran tidak valid" }),
-  }),
+  paymentAccountId: z.string().max(40).nullable(),
   isActive: z.boolean(),
 });
 

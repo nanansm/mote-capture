@@ -21,8 +21,9 @@ import type { Context } from "hono";
 import type { Bindings } from "@/lib/env";
 import { getDb, schema } from "@/db";
 import { logger } from "@/lib/logger";
-import { getPaymentProvider, type VerifyWebhookResult } from "@/lib/payment";
-import { resolveCredentials } from "@/lib/runtime-credentials";
+import type { VerifyWebhookResult } from "@/lib/payment";
+import { parseIpaymuBody } from "@/lib/payment/ipaymu";
+import { loadAccount, loadAccountsByProvider, type LoadedAccount } from "@/lib/payment-accounts";
 import { markExpired, markPaid } from "@/do/rpc";
 import { isLatePayment, recordLatePayment } from "@/lib/auto-voucher";
 
@@ -35,7 +36,7 @@ type Ctx = Context<{ Bindings: Bindings }>;
 
 // Alur bersama setelah callback lolos verifikasi provider. Hanya membaca
 // `sessions`; transisi status diserahkan ke BoothDO lewat RPC.
-async function handleVerified(c: Ctx, provider: ProviderName, verification: VerifyWebhookResult) {
+async function handleVerified(c: Ctx, provider: ProviderName, accountId: string, verification: VerifyWebhookResult) {
   const db = getDb(c.env.DB);
   const rawPayload = (verification.rawPayload as Record<string, unknown> | undefined) ?? null;
 
@@ -51,6 +52,14 @@ async function handleVerified(c: Ctx, provider: ProviderName, verification: Veri
     await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "session_not_found", payload: rawPayload });
     // 200 supaya provider tidak mengulang terus untuk sesi yang tidak akan ada.
     return c.json({ ok: true, message: "session not found" });
+  }
+
+  // Callback hanya boleh menyentuh sesi yang QR-nya dibuat akun yang sama.
+  // Sesi lama (sebelum akun per booth) tidak punya akun: diterima.
+  if (session.paymentAccountId && session.paymentAccountId !== accountId) {
+    await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "account_mismatch", payload: rawPayload });
+    logger.warn(`${provider}_webhook_account_mismatch`, { sessionId, accountId, expected: session.paymentAccountId });
+    return c.json({ ok: true, message: "account mismatch" });
   }
 
   // iPaymu: transaksi hasil Check Transaction wajib sama dengan QR yang dibuat
@@ -127,40 +136,85 @@ function lowerHeaders(c: Ctx): Record<string, string> {
   return headers;
 }
 
+// Xendit: satu URL per akun (didaftarkan di dashboard Xendit akun tsb).
+// Token callback dicek dengan token akun itu saja.
+async function xenditVerify(c: Ctx, account: LoadedAccount, rawBody: string) {
+  return account.provider.verifyWebhook({ headers: lowerHeaders(c), body: rawBody });
+}
+
+webhook.post("/xendit/:accountId", async (c) => {
+  const rawBody = await c.req.text();
+  const db = getDb(c.env.DB);
+  const account = await loadAccount(db, c.env, c.req.param("accountId"));
+  if (!account || account.row.provider !== "xendit") {
+    logger.warn("xendit_webhook_unknown_account", { accountId: c.req.param("accountId") });
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+  const verification = await xenditVerify(c, account, rawBody);
+  if (!verification.valid) {
+    // Token salah: jangan percaya isi body, jangan tulis payment_logs.
+    logger.warn("xendit_invalid_webhook", { reason: verification.reason, accountId: account.row.id });
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+  return handleVerified(c, "xendit", account.row.id, verification);
+});
+
+// URL lama tanpa id akun (sudah terdaftar di dashboard Xendit sebelum akun per
+// booth). Token dicocokkan ke semua akun Xendit; yang cocok = pengirimnya.
 webhook.post("/xendit", async (c) => {
   const rawBody = await c.req.text();
   const db = getDb(c.env.DB);
-  // Token webhook dari sumber yang sama dengan key pembuat QR.
-  const { xendit } = await resolveCredentials(db, c.env);
-  const provider = getPaymentProvider("xendit", c.env, { xendit });
-  const verification = await provider.verifyWebhook({ headers: lowerHeaders(c), body: rawBody });
-
-  if (!verification.valid) {
-    // Token salah: jangan percaya isi body, jangan tulis payment_logs.
-    logger.warn("xendit_invalid_webhook", { reason: verification.reason });
-    return c.json({ error: "Invalid signature" }, 401);
+  const candidates = await loadAccountsByProvider(db, c.env, "xendit");
+  for (const account of candidates) {
+    const verification = await xenditVerify(c, account, rawBody);
+    if (verification.valid) return handleVerified(c, "xendit", account.row.id, verification);
   }
-  return handleVerified(c, "xendit", verification);
+  logger.warn("xendit_invalid_webhook", { reason: "no account token matched", accounts: candidates.length });
+  return c.json({ error: "Invalid signature" }, 401);
 });
 
 // iPaymu: status lunas TIDAK diambil dari body callback. Provider memanggil
-// Check Transaction ke API iPaymu dengan kredensial kita, dan hasil itu yang
-// dipakai (lihat lib/payment/ipaymu.ts).
-webhook.post("/ipaymu", async (c) => {
-  const rawBody = await c.req.text();
-  const db = getDb(c.env.DB);
-  const { ipaymu } = await resolveCredentials(db, c.env);
-  const provider = getPaymentProvider("ipaymu", c.env, { ipaymu });
-  const verification = await provider.verifyWebhook({ headers: lowerHeaders(c), body: rawBody });
-
+// Check Transaction ke API iPaymu dengan kredensial akun pembuat QR, dan hasil
+// itu yang dipakai (lihat lib/payment/ipaymu.ts).
+async function ipaymuHandle(c: Ctx, account: LoadedAccount | null, rawBody: string) {
+  if (!account || account.row.provider !== "ipaymu") {
+    logger.warn("ipaymu_webhook_unknown_account");
+    return c.json({ error: "Unverified callback" }, 400);
+  }
+  const verification = await account.provider.verifyWebhook({ headers: lowerHeaders(c), body: rawBody });
   if (!verification.valid) {
-    logger.warn("ipaymu_unverified_webhook", { reason: verification.reason });
+    logger.warn("ipaymu_unverified_webhook", { reason: verification.reason, accountId: account.row.id });
     // 400 bukan 401: bisa karena API iPaymu sedang gangguan, biar iPaymu mengulang.
     return c.json({ error: "Unverified callback" }, 400);
   }
   const raw = verification.rawPayload as Record<string, unknown> | undefined;
   if (raw && raw.signatureOk === false) logger.warn("ipaymu_webhook_signature_mismatch", { verifiedBy: "check_transaction" });
-  return handleVerified(c, "ipaymu", verification);
+  return handleVerified(c, "ipaymu", account.row.id, verification);
+}
+
+webhook.post("/ipaymu/:accountId", async (c) => {
+  const rawBody = await c.req.text();
+  const account = await loadAccount(getDb(c.env.DB), c.env, c.req.param("accountId"));
+  return ipaymuHandle(c, account, rawBody);
+});
+
+// Tanpa id akun: akun diambil dari sesi yang disebut body. Aman karena body
+// tidak dipercaya; status tetap dari Check Transaction akun sesi itu.
+webhook.post("/ipaymu", async (c) => {
+  const rawBody = await c.req.text();
+  const db = getDb(c.env.DB);
+  const body = parseIpaymuBody(rawBody, c.req.header("content-type") ?? "");
+  const ref = body?.reference_id != null ? String(body.reference_id) : "";
+  let account: LoadedAccount | null = null;
+  if (ref) {
+    const [s] = await db
+      .select({ accountId: schema.sessions.paymentAccountId })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, ref))
+      .limit(1);
+    account = await loadAccount(db, c.env, s?.accountId);
+  }
+  return ipaymuHandle(c, account, rawBody);
 });
 
 export default webhook;

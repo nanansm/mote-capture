@@ -59,8 +59,8 @@ import {
 import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/db";
-import { getPaymentProvider } from "@/lib/payment";
-import { resolveCredentials } from "@/lib/runtime-credentials";
+import { XenditProvider, type PaymentProvider } from "@/lib/payment";
+import { isLocalDev, loadAccount } from "@/lib/payment-accounts";
 import { generateDownloadToken, generateSessionId } from "@/lib/id";
 import { notifySession } from "@/lib/notify";
 import { logger } from "@/lib/logger";
@@ -386,6 +386,8 @@ export class BoothDO extends DurableObject<Bindings> {
     let paymentRef: string | null = null;
     let expiresAt: Date;
     let mockMode = false;
+    let sessionProvider: string = booth.paymentProvider;
+    let sessionAccountId: string | null = null;
 
     if (parsed.data.method === "voucher") {
       // No QR — the kiosk collects a voucher code and redeems it via the
@@ -394,12 +396,25 @@ export class BoothDO extends DurableObject<Bindings> {
       // doesn't linger forever — reuses the same qr_expiry alarm path.
       expiresAt = new Date(Date.now() + SESSION_TIMING.VOUCHER_INPUT_EXPIRY_MS);
     } else {
-      const { xendit, ipaymu } = await resolveCredentials(db, this.env);
-      const provider = getPaymentProvider(
-        booth.paymentProvider as "xendit" | "ipaymu",
-        this.env,
-        { xendit, ipaymu },
-      );
+      // Kredensial milik booth ini saja. Tanpa akun = tolak dengan jelas, tidak
+      // ada QR palsu dan tidak ada jatuh ke akun lain. Mock hanya di dev lokal.
+      const account = await loadAccount(db, this.env, booth.paymentAccountId);
+      let provider: PaymentProvider;
+      if (account) {
+        provider = account.provider;
+        sessionProvider = account.row.provider;
+        sessionAccountId = account.row.id;
+      } else if (isLocalDev(this.env)) {
+        provider = new XenditProvider({});
+        sessionProvider = "xendit";
+      } else {
+        logger.warn("booth_payment_not_configured", { boothId: ownBoothId, accountId: booth.paymentAccountId });
+        return {
+          ok: false,
+          code: "PAYMENT_NOT_CONFIGURED",
+          error: "QRIS belum diatur untuk booth ini. Pakai voucher atau panggil operator.",
+        };
+      }
       // PRD bagian 8 #4: QR hidup 1 menit, sama dengan PAYMENT_TIMEOUT kiosk.
       const qr = await provider.createQR({ sessionId, amount, expiresInMinutes: SESSION_TIMING.QR_EXPIRY_MINUTES });
       qrString = qr.qrString;
@@ -414,7 +429,8 @@ export class BoothDO extends DurableObject<Bindings> {
       frameId: frame?.id ?? null,
       status: "payment",
       amount,
-      paymentProvider: booth.paymentProvider,
+      paymentProvider: parsed.data.method === "voucher" ? booth.paymentProvider : sessionProvider,
+      paymentAccountId: sessionAccountId,
       paymentRef,
       qrString,
       downloadToken,
@@ -424,7 +440,7 @@ export class BoothDO extends DurableObject<Bindings> {
 
     await db.insert(schema.paymentLogs).values({
       sessionId,
-      provider: parsed.data.method === "voucher" ? "voucher" : booth.paymentProvider,
+      provider: parsed.data.method === "voucher" ? "voucher" : sessionProvider,
       eventType: parsed.data.method === "voucher" ? "voucher_pending" : "qr_created",
       payload: { providerRef: paymentRef, amount, mock: mockMode, method: parsed.data.method },
     });

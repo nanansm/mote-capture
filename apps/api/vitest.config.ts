@@ -22,7 +22,6 @@ export default defineConfig(async () => {
             ADMIN_EMAIL: "admin@test.local",
             ADMIN_PASSWORD: "test-password",
             BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-00",
-            XENDIT_WEBHOOK_TOKEN: "test-webhook-token",
             SETTINGS_ENC_KEY: "dGVzdC1rZXktdGVzdC1rZXktdGVzdC1rZXktMDA=",
           },
         },
