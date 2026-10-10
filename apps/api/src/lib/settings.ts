@@ -43,6 +43,9 @@ export type CredentialSettings = {
   evolution_api_url: string;
   evolution_api_key: string;
   evolution_instance_name: string;
+  ipaymu_va: string;
+  ipaymu_api_key: string;
+  ipaymu_mode: string;
 };
 
 export type SettingMap = {
@@ -68,6 +71,9 @@ const DEFAULTS: SettingMap = {
     evolution_api_url: "",
     evolution_api_key: "",
     evolution_instance_name: "",
+    ipaymu_va: "",
+    ipaymu_api_key: "",
+    ipaymu_mode: "",
   },
 };
 

@@ -394,11 +394,11 @@ export class BoothDO extends DurableObject<Bindings> {
       // doesn't linger forever — reuses the same qr_expiry alarm path.
       expiresAt = new Date(Date.now() + SESSION_TIMING.VOUCHER_INPUT_EXPIRY_MS);
     } else {
-      const { xendit } = await resolveCredentials(db, this.env);
+      const { xendit, ipaymu } = await resolveCredentials(db, this.env);
       const provider = getPaymentProvider(
         booth.paymentProvider as "xendit" | "ipaymu",
         this.env,
-        xendit,
+        { xendit, ipaymu },
       );
       // PRD bagian 8 #4: QR hidup 1 menit, sama dengan PAYMENT_TIMEOUT kiosk.
       const qr = await provider.createQR({ sessionId, amount, expiresInMinutes: SESSION_TIMING.QR_EXPIRY_MINUTES });

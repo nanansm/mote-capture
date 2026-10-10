@@ -10,10 +10,18 @@
 import type { Bindings } from "@/lib/env";
 import type { PaymentProvider, PaymentProviderName } from "./types";
 import { XenditProvider } from "./xendit";
+import { IpaymuProvider, type IpaymuCredentials } from "./ipaymu";
 
 export * from "./types";
 export { XenditProvider } from "./xendit";
 export type { XenditCredentials } from "./xendit";
+export { IpaymuProvider } from "./ipaymu";
+export type { IpaymuCredentials } from "./ipaymu";
+
+export type ProviderCredentials = {
+  xendit?: { secretKey?: string; webhookToken?: string };
+  ipaymu?: IpaymuCredentials;
+};
 
 // `credentials` wins over the Bindings fallback so an admin-entered key takes
 // effect on the next request without a deploy (lib/runtime-credentials.ts).
@@ -22,16 +30,20 @@ export type { XenditCredentials } from "./xendit";
 export function getPaymentProvider(
   name: PaymentProviderName,
   env: Bindings,
-  credentials?: { secretKey?: string; webhookToken?: string },
+  credentials?: ProviderCredentials,
 ): PaymentProvider {
   switch (name) {
     case "xendit":
       return new XenditProvider({
-        secretKey: credentials?.secretKey ?? env.XENDIT_SECRET_KEY,
-        webhookToken: credentials?.webhookToken ?? env.XENDIT_WEBHOOK_TOKEN,
+        secretKey: credentials?.xendit?.secretKey ?? env.XENDIT_SECRET_KEY,
+        webhookToken: credentials?.xendit?.webhookToken ?? env.XENDIT_WEBHOOK_TOKEN,
       });
     case "ipaymu":
-      throw new Error("iPaymu provider belum diimplementasikan (Sprint 2 hanya Xendit).");
+      // iPaymu hanya dari panel admin (D1), sengaja tanpa fallback Worker secret.
+      return new IpaymuProvider({
+        ...credentials?.ipaymu,
+        notifyUrl: credentials?.ipaymu?.notifyUrl ?? `${(env.APP_URL ?? "").replace(/\/$/, "")}/api/webhook/ipaymu`,
+      });
     default:
       throw new Error(`Payment provider tidak dikenal: ${name satisfies never}`);
   }

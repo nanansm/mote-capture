@@ -24,8 +24,15 @@ export type EvolutionCredentialSet = {
   instanceName?: string;
 };
 
+export type IpaymuCredentialSet = {
+  va?: string;
+  apiKey?: string;
+  mode?: "production" | "sandbox";
+};
+
 export type ResolvedCredentials = {
   xendit: XenditCredentialSet;
+  ipaymu: IpaymuCredentialSet;
   evolution: EvolutionCredentialSet;
   // True when at least one stored credential could not be opened — surfaced by
   // the settings UI so a wrong/rotated SETTINGS_ENC_KEY is visible instead of
@@ -64,18 +71,26 @@ export async function resolveCredentials(
   const passphrase = bindings.SETTINGS_ENC_KEY;
   const state = { failed: false };
 
-  const [secretKey, webhookToken, apiUrl, apiKey, instanceName] = await Promise.all([
+  const [secretKey, webhookToken, apiUrl, apiKey, instanceName, ipaymuVa, ipaymuApiKey, ipaymuMode] = await Promise.all([
     open(stored.xendit_secret_key, passphrase, "xendit_secret_key", state),
     open(stored.xendit_webhook_token, passphrase, "xendit_webhook_token", state),
     open(stored.evolution_api_url, passphrase, "evolution_api_url", state),
     open(stored.evolution_api_key, passphrase, "evolution_api_key", state),
     open(stored.evolution_instance_name, passphrase, "evolution_instance_name", state),
+    open(stored.ipaymu_va ?? "", passphrase, "ipaymu_va", state),
+    open(stored.ipaymu_api_key ?? "", passphrase, "ipaymu_api_key", state),
+    open(stored.ipaymu_mode ?? "", passphrase, "ipaymu_mode", state),
   ]);
 
   return {
     xendit: {
       secretKey: secretKey ?? env.XENDIT_SECRET_KEY,
       webhookToken: webhookToken ?? env.XENDIT_WEBHOOK_TOKEN,
+    },
+    ipaymu: {
+      va: ipaymuVa,
+      apiKey: ipaymuApiKey,
+      mode: ipaymuMode === "sandbox" ? "sandbox" : "production",
     },
     evolution: {
       apiUrl: apiUrl ?? env.EVOLUTION_API_URL,

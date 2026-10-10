@@ -31,6 +31,7 @@ import { getAllSettings, getSetting, setSetting, type SettingMap } from "@/lib/s
 import { decryptSecret, encryptSecret, maskSecret } from "@/lib/secret-box";
 import { credentialSource, resolveCredentials, type CredentialSource } from "@/lib/runtime-credentials";
 import { logger } from "@/lib/logger";
+import { IpaymuProvider } from "@/lib/payment";
 
 const settings = new Hono<{ Bindings: Bindings; Variables: AdminVariables }>();
 
@@ -51,7 +52,13 @@ const CREDENTIAL_FIELDS = [
   "evolution_api_url",
   "evolution_api_key",
   "evolution_instance_name",
+  "ipaymu_va",
+  "ipaymu_api_key",
+  "ipaymu_mode",
 ] as const;
+
+// Nilai yang bukan rahasia, ditampilkan utuh di panel supaya salah isi mudah terlihat.
+const PLAIN_FIELDS = new Set<string>(["evolution_api_url", "evolution_instance_name", "ipaymu_mode"]);
 
 const credentialsBodySchema = z.object({
   xendit_secret_key: z.string().max(500).optional(),
@@ -59,6 +66,13 @@ const credentialsBodySchema = z.object({
   evolution_api_url: z.string().max(500).optional(),
   evolution_api_key: z.string().max(500).optional(),
   evolution_instance_name: z.string().max(200).optional(),
+  ipaymu_va: z
+    .string()
+    .max(40)
+    .regex(/^\s*\d*\s*$/, "VA iPaymu hanya angka")
+    .optional(),
+  ipaymu_api_key: z.string().max(200).optional(),
+  ipaymu_mode: z.union([z.enum(["production", "sandbox"]), z.literal("")]).optional(),
   // Explicit opt-in to wipe a stored value and fall back to the Worker secret.
   clear: z.array(z.enum(CREDENTIAL_FIELDS)).optional(),
 });
@@ -79,12 +93,16 @@ settings.get("/", async (c) => {
     evolution_api_url: env.EVOLUTION_API_URL,
     evolution_api_key: env.EVOLUTION_API_KEY,
     evolution_instance_name: env.EVOLUTION_INSTANCE_NAME,
+    // iPaymu hanya dari panel ini, tanpa Worker secret.
+    ipaymu_va: undefined,
+    ipaymu_api_key: undefined,
+    ipaymu_mode: undefined,
   };
 
   const credentials: Record<string, { masked: string; source: CredentialSource }> = {};
   let decryptFailed = false;
   for (const field of CREDENTIAL_FIELDS) {
-    const envelope = stored[field];
+    const envelope = stored[field] ?? "";
     const source = credentialSource(envelope, envFallback[field]);
     let masked = "";
     if (envelope && passphrase) {
@@ -92,19 +110,11 @@ settings.get("/", async (c) => {
       if (plain === null) decryptFailed = true;
       // The Evolution URL and instance name are not secrets — showing them in
       // full is what makes the panel usable for spotting a wrong instance.
-      masked =
-        plain === null
-          ? ""
-          : field === "evolution_api_url" || field === "evolution_instance_name"
-            ? plain
-            : maskSecret(plain);
+      masked = plain === null ? "" : PLAIN_FIELDS.has(field) ? plain : maskSecret(plain);
     } else if (envelope && !passphrase) {
       decryptFailed = true;
     } else if (source === "server") {
-      masked =
-        field === "evolution_api_url" || field === "evolution_instance_name"
-          ? (envFallback[field] ?? "")
-          : maskSecret(envFallback[field] ?? "");
+      masked = PLAIN_FIELDS.has(field) ? (envFallback[field] ?? "") : maskSecret(envFallback[field] ?? "");
     }
     credentials[field] = { masked, source };
   }
@@ -197,7 +207,7 @@ settings.patch("/", async (c) => {
 });
 
 const testConnectionBodySchema = z.object({
-  service: z.enum(["email", "whatsapp", "xendit"]),
+  service: z.enum(["email", "whatsapp", "xendit", "ipaymu"]),
   to: z.string().email().optional(),
 });
 
@@ -329,6 +339,19 @@ settings.post("/test-connection", async (c) => {
       const message = err instanceof Error ? err.message : "Unknown error";
       return c.json({ success: false, message });
     }
+  }
+
+  if (service === "ipaymu") {
+    if (!resolved.ipaymu.va || !resolved.ipaymu.apiKey) {
+      return c.json({
+        success: false,
+        message: resolved.hasUndecryptable
+          ? "Kredensial iPaymu tersimpan tapi tidak bisa dibuka — isi ulang dari halaman ini."
+          : "VA / API Key iPaymu belum diisi.",
+      });
+    }
+    const result = await new IpaymuProvider(resolved.ipaymu).ping();
+    return c.json({ success: result.ok, message: result.message });
   }
 
   return c.json({ error: "Service tidak dikenal" }, 400);

@@ -17,10 +17,11 @@
 // separate markFailed) — see apps/api/src/do/rpc.ts.
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
+import type { Context } from "hono";
 import type { Bindings } from "@/lib/env";
 import { getDb, schema } from "@/db";
 import { logger } from "@/lib/logger";
-import { getPaymentProvider } from "@/lib/payment";
+import { getPaymentProvider, type VerifyWebhookResult } from "@/lib/payment";
 import { resolveCredentials } from "@/lib/runtime-credentials";
 import { markExpired, markPaid } from "@/do/rpc";
 import { isLatePayment, recordLatePayment } from "@/lib/auto-voucher";
@@ -29,81 +30,57 @@ const webhook = new Hono<{ Bindings: Bindings }>();
 
 const PAID_TERMINAL_STATUSES = new Set(["paid", "capturing", "processing", "done", "abandoned_paid", "stale"]);
 
-webhook.post("/xendit", async (c) => {
-  const rawBody = await c.req.text();
-  const headers: Record<string, string> = {};
-  c.req.raw.headers.forEach((value, key) => {
-    headers[key.toLowerCase()] = value;
-  });
+type ProviderName = "xendit" | "ipaymu";
+type Ctx = Context<{ Bindings: Bindings }>;
 
+// Alur bersama setelah callback lolos verifikasi provider. Hanya membaca
+// `sessions`; transisi status diserahkan ke BoothDO lewat RPC.
+async function handleVerified(c: Ctx, provider: ProviderName, verification: VerifyWebhookResult) {
   const db = getDb(c.env.DB);
-  // Webhook token has to come from the same source as the key that created the
-  // QR — otherwise rotating credentials in the UI would start rejecting live
-  // callbacks as invalid signatures.
-  const { xendit } = await resolveCredentials(db, c.env);
-  const provider = getPaymentProvider("xendit", c.env, xendit);
-  const verification = await provider.verifyWebhook({ headers, body: rawBody });
-
-  if (!verification.valid) {
-    // Token check failed — do NOT trust anything in the body, and do not
-    // write payment_logs for it (nothing here is verified as coming from
-    // Xendit at all).
-    logger.warn("xendit_invalid_webhook", { reason: verification.reason });
-    return c.json({ error: "Invalid signature" }, 401);
-  }
+  const rawPayload = (verification.rawPayload as Record<string, unknown> | undefined) ?? null;
 
   if (!verification.sessionRef) {
-    await db.insert(schema.paymentLogs).values({
-      provider: "xendit",
-      eventType: "missing_reference",
-      payload: (verification.rawPayload as Record<string, unknown> | undefined) ?? null,
-    });
+    await db.insert(schema.paymentLogs).values({ provider, eventType: "missing_reference", payload: rawPayload });
     return c.json({ ok: true, message: "no reference_id" });
   }
 
   const sessionId = verification.sessionRef;
-
-  // READ-ONLY: BoothDO is the sole writer of `sessions` (see file header).
-  const [session] = await db
-    .select()
-    .from(schema.sessions)
-    .where(eq(schema.sessions.id, sessionId))
-    .limit(1);
+  const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
 
   if (!session) {
-    await db.insert(schema.paymentLogs).values({
-      sessionId,
-      provider: "xendit",
-      eventType: "session_not_found",
-      payload: (verification.rawPayload as Record<string, unknown> | undefined) ?? null,
-    });
-    // 200 anyway so Xendit doesn't retry forever over a session that will
-    // never show up (e.g. stale/replayed callback).
+    await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "session_not_found", payload: rawPayload });
+    // 200 supaya provider tidak mengulang terus untuk sesi yang tidak akan ada.
     return c.json({ ok: true, message: "session not found" });
+  }
+
+  // iPaymu: transaksi hasil Check Transaction wajib sama dengan QR yang dibuat
+  // untuk sesi ini. Mencegah transaksi lain (referenceId sama) menandai lunas.
+  if (provider === "ipaymu") {
+    const verifiedTrx = rawPayload?.verifiedTransactionId;
+    if (session.paymentProvider !== "ipaymu" || (session.paymentRef && String(verifiedTrx) !== session.paymentRef)) {
+      await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "reference_mismatch", payload: rawPayload });
+      logger.warn("ipaymu_webhook_reference_mismatch", { sessionId });
+      return c.json({ ok: true, message: "reference mismatch" });
+    }
+    if (verification.event === "paid" && typeof verification.amount === "number" && verification.amount < session.amount) {
+      await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "amount_mismatch", payload: rawPayload });
+      logger.warn("ipaymu_webhook_amount_mismatch", { sessionId, paid: verification.amount, expected: session.amount });
+      return c.json({ ok: true, message: "amount mismatch" });
+    }
   }
 
   if (verification.event === "paid") {
     if (PAID_TERMINAL_STATUSES.has(session.status)) {
-      await db.insert(schema.paymentLogs).values({
-        sessionId,
-        provider: "xendit",
-        eventType: "duplicate",
-        payload: (verification.rawPayload as Record<string, unknown> | undefined) ?? null,
-      });
-      logger.info("xendit_webhook_duplicate", { sessionId, status: session.status });
+      await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "duplicate", payload: rawPayload });
+      logger.info(`${provider}_webhook_duplicate`, { sessionId, status: session.status });
       return c.json({ ok: true, duplicate: true });
     }
 
-    const rawPayload = (verification.rawPayload as Record<string, unknown> | undefined) ?? null;
-
     if (session.status === "payment") {
-      await db.insert(schema.paymentLogs).values({ sessionId, provider: "xendit", eventType: "paid", payload: rawPayload });
-      const transitioned = await markPaid(c.env, session.boothId, sessionId, {
-        amount: verification.amount,
-        provider: "xendit",
-      });
+      await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "paid", payload: rawPayload });
+      const transitioned = await markPaid(c.env, session.boothId, sessionId, { amount: verification.amount, provider });
       if (transitioned) {
-        logger.info("xendit_webhook_paid", { sessionId, amount: verification.amount });
+        logger.info(`${provider}_webhook_paid`, { sessionId, amount: verification.amount });
         return c.json({ ok: true });
       }
       // Alarm kedaluwarsa menang di antara baca dan markPaid. Baca ulang lalu
@@ -113,45 +90,77 @@ webhook.post("/xendit", async (c) => {
         return c.json({ ok: true, duplicate: true });
       }
     } else if (!isLatePayment(session)) {
-      await db.insert(schema.paymentLogs).values({ sessionId, provider: "xendit", eventType: "paid_unexpected_status", payload: rawPayload });
-      logger.warn("xendit_webhook_paid_unexpected_status", { sessionId, status: session.status });
+      await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "paid_unexpected_status", payload: rawPayload });
+      logger.warn(`${provider}_webhook_paid_unexpected_status`, { sessionId, status: session.status });
       return c.json({ ok: true });
     }
 
-    // Pembayaran terlambat. Selalu balas 200: Xendit tidak perlu mengulang,
-    // dan voucher idempoten per sesi kalau callback tetap terulang.
+    // Pembayaran terlambat: voucher otomatis, idempoten per sesi.
     const voucher = await recordLatePayment(db, session, {
-      provider: "xendit",
+      provider,
       rawPayload,
       paidAmount: verification.amount ?? null,
     });
     // Kode voucher tidak pernah masuk log (PRD bagian 12).
-    logger.info("xendit_webhook_late_payment", { sessionId, voucherId: voucher.id, created: voucher.created });
+    logger.info(`${provider}_webhook_late_payment`, { sessionId, voucherId: voucher.id, created: voucher.created });
     return c.json({ ok: true, latePayment: true });
   }
 
   if (verification.event === "expired" || verification.event === "failed") {
-    await db.insert(schema.paymentLogs).values({
-      sessionId,
-      provider: "xendit",
-      eventType: verification.event,
-      payload: (verification.rawPayload as Record<string, unknown> | undefined) ?? null,
-    });
-
-    await markExpired(c.env, session.boothId, sessionId);
-
-    logger.info("xendit_webhook_not_paid", { sessionId, event: verification.event });
+    await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: verification.event, payload: rawPayload });
+    // Hanya sesi yang masih menunggu bayar yang boleh ditutup oleh callback.
+    if (session.status === "payment") await markExpired(c.env, session.boothId, sessionId);
+    logger.info(`${provider}_webhook_not_paid`, { sessionId, event: verification.event });
     return c.json({ ok: true });
   }
 
-  // Unknown event — log but ack so Xendit doesn't keep retrying.
-  await db.insert(schema.paymentLogs).values({
-    sessionId,
-    provider: "xendit",
-    eventType: "unknown_event",
-    payload: (verification.rawPayload as Record<string, unknown> | undefined) ?? null,
-  });
+  // Event lain (mis. pending) — catat, balas 200 supaya tidak diulang.
+  await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "unknown_event", payload: rawPayload });
   return c.json({ ok: true });
+}
+
+function lowerHeaders(c: Ctx): Record<string, string> {
+  const headers: Record<string, string> = {};
+  c.req.raw.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+  return headers;
+}
+
+webhook.post("/xendit", async (c) => {
+  const rawBody = await c.req.text();
+  const db = getDb(c.env.DB);
+  // Token webhook dari sumber yang sama dengan key pembuat QR.
+  const { xendit } = await resolveCredentials(db, c.env);
+  const provider = getPaymentProvider("xendit", c.env, { xendit });
+  const verification = await provider.verifyWebhook({ headers: lowerHeaders(c), body: rawBody });
+
+  if (!verification.valid) {
+    // Token salah: jangan percaya isi body, jangan tulis payment_logs.
+    logger.warn("xendit_invalid_webhook", { reason: verification.reason });
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+  return handleVerified(c, "xendit", verification);
+});
+
+// iPaymu: status lunas TIDAK diambil dari body callback. Provider memanggil
+// Check Transaction ke API iPaymu dengan kredensial kita, dan hasil itu yang
+// dipakai (lihat lib/payment/ipaymu.ts).
+webhook.post("/ipaymu", async (c) => {
+  const rawBody = await c.req.text();
+  const db = getDb(c.env.DB);
+  const { ipaymu } = await resolveCredentials(db, c.env);
+  const provider = getPaymentProvider("ipaymu", c.env, { ipaymu });
+  const verification = await provider.verifyWebhook({ headers: lowerHeaders(c), body: rawBody });
+
+  if (!verification.valid) {
+    logger.warn("ipaymu_unverified_webhook", { reason: verification.reason });
+    // 400 bukan 401: bisa karena API iPaymu sedang gangguan, biar iPaymu mengulang.
+    return c.json({ error: "Unverified callback" }, 400);
+  }
+  const raw = verification.rawPayload as Record<string, unknown> | undefined;
+  if (raw && raw.signatureOk === false) logger.warn("ipaymu_webhook_signature_mismatch", { verifiedBy: "check_transaction" });
+  return handleVerified(c, "ipaymu", verification);
 });
 
 export default webhook;

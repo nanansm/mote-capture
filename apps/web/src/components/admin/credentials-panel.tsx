@@ -20,6 +20,8 @@ export type CredentialField = {
   // Non-secret values (URL, instance name) come back in full and are editable
   // as normal text; secrets only ever show a mask.
   plain?: boolean;
+  // Pilihan tetap (mis. mode sandbox/production) dirender sebagai dropdown.
+  options?: { value: string; label: string }[];
 };
 
 export type CredentialState = Record<string, { masked: string; source: "ui" | "server" | "none" }>;
@@ -58,6 +60,7 @@ export function CredentialsPanel({
   initial,
   meta,
   onSaved,
+  clearLabel = "Hapus & pakai secret server",
 }: {
   title: string;
   description: string;
@@ -65,6 +68,7 @@ export function CredentialsPanel({
   initial: CredentialState;
   meta: CredentialsMeta;
   onSaved?: () => void;
+  clearLabel?: string;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -159,6 +163,25 @@ export function CredentialsPanel({
                 </label>
                 <SourceBadge source={current?.source ?? "none"} />
               </div>
+              {field.options ? (
+                <select
+                  id={field.key}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={values[field.key] ?? ""}
+                  onChange={(e) => setValues((v) => ({ ...v, [field.key]: e.target.value }))}
+                >
+                  <option value="">
+                    {current?.masked
+                      ? `Tetap: ${field.options.find((o) => o.value === current.masked)?.label ?? current.masked}`
+                      : "Pilih…"}
+                  </option>
+                  {field.options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
               <input
                 id={field.key}
                 type={field.plain ? "text" : "password"}
@@ -168,6 +191,7 @@ export function CredentialsPanel({
                 value={values[field.key] ?? ""}
                 onChange={(e) => setValues((v) => ({ ...v, [field.key]: e.target.value }))}
               />
+              )}
               {field.hint ? (
                 <p className="text-xs text-muted-foreground">{field.hint}</p>
               ) : null}
@@ -192,7 +216,7 @@ export function CredentialsPanel({
               void save(installed);
             }}
           >
-            Hapus & pakai secret server
+            {clearLabel}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">

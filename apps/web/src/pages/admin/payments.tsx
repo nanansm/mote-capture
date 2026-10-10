@@ -9,23 +9,19 @@ import { get } from "@/lib/api";
 
 type SettingsResponse = {
   data: {
-    payment: { default_provider: string };
     credentials: CredentialState;
     credentialsMeta: CredentialsMeta;
   };
 };
 
-// Ported from apps/cloud/app/admin/payments/page.tsx, plus the Xendit
-// credential panel so keys can be rotated without a redeploy.
+// Kredensial Xendit + iPaymu diatur dari sini tanpa redeploy.
 export default function PaymentsPage() {
-  const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<CredentialState | null>(null);
   const [meta, setMeta] = useState<CredentialsMeta | null>(null);
 
   const load = useCallback(() => {
     return get<SettingsResponse>("/settings")
       .then((res) => {
-        setDefaultProvider(res.data.payment.default_provider);
         setCredentials(res.data.credentials);
         setMeta(res.data.credentialsMeta);
       })
@@ -41,7 +37,7 @@ export default function PaymentsPage() {
       <div>
         <h2 className="text-xl font-semibold text-brand-green-dark">Payments</h2>
         <p className="text-sm text-muted-foreground">
-          Atur provider pembayaran, kredensial Xendit, dan lihat audit trail webhook.
+          Isi kredensial Xendit dan/atau iPaymu, tes koneksi, lalu pilih provider di tiap booth.
         </p>
       </div>
 
@@ -67,7 +63,40 @@ export default function PaymentsPage() {
         />
       ) : null}
 
-      {defaultProvider ? <PaymentsSettings defaultProvider={defaultProvider} /> : null}
+      {credentials && meta ? (
+        <CredentialsPanel
+          title="Kredensial iPaymu"
+          description="Dipakai untuk QRIS iPaymu. Ambil dari dashboard iPaymu → menu Integrasi / API Key. Nilai sandbox dan production berbeda, jangan dicampur."
+          meta={meta}
+          initial={credentials}
+          onSaved={load}
+          clearLabel="Hapus kredensial iPaymu"
+          fields={[
+            {
+              key: "ipaymu_mode",
+              label: "Mode",
+              hint: "Sandbox = uang bohongan untuk uji. Production = uang asli. Akun sandbox dan production iPaymu terpisah.",
+              options: [
+                { value: "production", label: "Production (uang asli)" },
+                { value: "sandbox", label: "Sandbox (uji coba)" },
+              ],
+            },
+            {
+              key: "ipaymu_va",
+              label: "Nomor VA",
+              hint: "Angka saja, contoh 1179xxxxxxxxxxxx. Tertera di halaman API Key iPaymu.",
+              plain: true,
+            },
+            {
+              key: "ipaymu_api_key",
+              label: "API Key",
+              hint: "Rahasia. Jangan dikirim lewat chat/WA.",
+            },
+          ]}
+        />
+      ) : null}
+
+      <PaymentsSettings />
     </div>
   );
 }
