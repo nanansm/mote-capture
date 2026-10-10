@@ -4,6 +4,7 @@ import LoginPage from "@/pages/login";
 import DownloadPage from "@/pages/download";
 import SharePage from "@/pages/share";
 import KioskPage from "@/pages/kiosk";
+import { ContactPage, FaqPage, RefundPage, TermsPage } from "@/pages/legal";
 import AdminLayout from "@/pages/admin/layout";
 import DashboardPage from "@/pages/admin/dashboard";
 import BoothsPage from "@/pages/admin/booths";
@@ -28,6 +29,12 @@ export default function App() {
       <Route path="/download" element={<DownloadPage />} />
       <Route path="/share/:token" element={<SharePage />} />
       <Route path="/kiosk/:boothId" element={<KioskPage />} />
+      <Route path="/faq" element={<FaqPage />} />
+      <Route path="/syarat-ketentuan" element={<TermsPage />} />
+      <Route path="/kebijakan-refund" element={<RefundPage />} />
+      <Route path="/kontak" element={<ContactPage />} />
+      <Route path="/terms" element={<Navigate to="/syarat-ketentuan" replace />} />
+      <Route path="/refund-policy" element={<Navigate to="/kebijakan-refund" replace />} />
 
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<Navigate to="dashboard" replace />} />

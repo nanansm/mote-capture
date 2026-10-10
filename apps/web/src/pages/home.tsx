@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { PublicFooter, PublicHeader } from "@/components/public-shell";
 
 // Public setup guide. This route used to redirect straight to /admin, so
 // anyone opening the bare domain — including a booth operator who only needs
@@ -91,7 +92,7 @@ const CHECKS: Array<[string, string]> = [
   ["Kamera", "Canon atau Nikon DSLR tersambung USB. digiCamControl ikut terpasang dari installer."],
   ["Printer", "Printer foto biasa, kertas 4R. Tidak perlu auto-cutter."],
   ["PC booth", "Windows 64-bit dengan Microsoft Edge, dan internet yang stabil."],
-  ["Pembayaran", "QRIS lewat Xendit — GoPay, OVO, DANA, ShopeePay, dan mobile banking."],
+  ["Pembayaran", "QRIS lewat iPaymu, Xendit, atau DOKU — GoPay, OVO, DANA, ShopeePay, dan mobile banking."],
 ];
 
 const TROUBLE: Array<[string, string]> = [
@@ -122,28 +123,7 @@ const ADDRESSES: Array<[string, string]> = [
 export default function Home() {
   return (
     <div className="min-h-screen bg-white text-brand-green-dark">
-      <header className="border-b border-zinc-200">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
-          <span className="flex items-center gap-2.5">
-            {/* The .webp is a square canvas with generous internal padding, so
-                the drawn mark reads about a third smaller than the box. */}
-            <img
-              src="/wlogogramsquare.webp"
-              alt=""
-              width={40}
-              height={40}
-              className="h-9 w-9 shrink-0 sm:h-10 sm:w-10"
-            />
-            <span className="text-sm font-bold uppercase tracking-[0.18em]">Mote Capture</span>
-          </span>
-          <Link
-            to="/login"
-            className="rounded-full px-4 py-2 text-sm font-semibold transition hover:bg-brand-cream"
-          >
-            Masuk Admin
-          </Link>
-        </div>
-      </header>
+      <PublicHeader />
 
       <main className="mx-auto max-w-5xl px-6">
         <section className="py-16 sm:py-24">
@@ -253,11 +233,7 @@ export default function Home() {
         </section>
       </main>
 
-      <footer className="border-t border-zinc-200">
-        <div className="mx-auto max-w-5xl px-6 py-10 text-sm text-zinc-500">
-          Capture by Mote Kreatif
-        </div>
-      </footer>
+      <PublicFooter />
     </div>
   );
 }
