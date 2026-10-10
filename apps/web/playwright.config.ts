@@ -15,7 +15,7 @@ export default defineConfig({
     // (proxying to the shared :8787 instance); this task's `vite --config
     // vite.config.e2e.ts` picked 5174 instead. Update if the dev server logs
     // a different port.
-    baseURL: "http://localhost:5174",
+    baseURL: process.env.ADMIN_E2E_BASE ?? "http://localhost:5174",
     trace: "retain-on-failure",
   },
   projects: [

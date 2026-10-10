@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 // Converted from packages/db/src/schema/*.ts (Postgres/Drizzle) to
 // drizzle-orm/sqlite-core for Cloudflare D1. Notes:
@@ -97,6 +97,33 @@ export const frames = sqliteTable(
 
 export type FrameRow = typeof frames.$inferSelect;
 export type FrameInsert = typeof frames.$inferInsert;
+
+// 0004: frame dipasang per booth dengan harga/status/urutan sendiri.
+// Sumber kebenaran harga sesi & daftar frame kiosk. frames.boothId/price
+// tidak dibaca lagi.
+export const boothFrames = sqliteTable(
+  "booth_frames",
+  {
+    boothId: text("booth_id")
+      .notNull()
+      .references(() => booths.id, { onDelete: "cascade" }),
+    frameId: text("frame_id")
+      .notNull()
+      .references(() => frames.id, { onDelete: "cascade" }),
+    price: integer("price").notNull(),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(now),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(now),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.boothId, table.frameId] }),
+    frameIdx: index("idx_booth_frames_frame").on(table.frameId),
+  }),
+);
+
+export type BoothFrameRow = typeof boothFrames.$inferSelect;
 
 export const sessions = sqliteTable(
   "sessions",

@@ -141,9 +141,8 @@ export type PrintStatusInput = {
   error?: string | null;
 };
 
-// Ported from apps/cloud/lib/session-helpers.ts#resolvePrice. `tier` is unused
-// by the actual logic there (frame.price is always the source of truth when
-// set), so the local port only needs `price`.
+// Harga sesi = harga frame di booth ini (booth_frames.price); tanpa frame
+// jatuh ke harga default booth.
 function resolvePrice(frame: { price: number } | null, boothDefaultPrice: number): number {
   if (!frame) return boothDefaultPrice;
   return frame.price > 0 ? frame.price : boothDefaultPrice;
@@ -366,17 +365,22 @@ export class BoothDO extends DurableObject<Bindings> {
     const [booth] = await db.select().from(schema.booths).where(eq(schema.booths.id, ownBoothId)).limit(1);
     if (!booth) return { ok: false, error: "Booth tidak ditemukan" };
 
-    let frame: typeof schema.frames.$inferSelect | undefined;
+    // 0004: harga & izin frame per booth dari booth_frames.
+    let frame: { id: string; price: number } | undefined;
     if (parsed.data.frameId) {
-      const [row] = await db.select().from(schema.frames).where(eq(schema.frames.id, parsed.data.frameId)).limit(1);
-      if (!row || !row.isActive) return { ok: false, error: "Frame tidak tersedia" };
-      if (row.boothId && row.boothId !== ownBoothId) {
+      const [row] = await db
+        .select({ price: schema.boothFrames.price, linkActive: schema.boothFrames.isActive, frameActive: schema.frames.isActive })
+        .from(schema.boothFrames)
+        .innerJoin(schema.frames, eq(schema.frames.id, schema.boothFrames.frameId))
+        .where(and(eq(schema.boothFrames.boothId, ownBoothId), eq(schema.boothFrames.frameId, parsed.data.frameId)))
+        .limit(1);
+      if (!row || !row.linkActive || !row.frameActive) {
         return { ok: false, error: "Frame tidak dipasang untuk booth ini" };
       }
-      frame = row;
+      frame = { id: parsed.data.frameId, price: row.price };
     }
 
-    const amount = resolvePrice(frame ? { price: frame.price } : null, booth.defaultPrice);
+    const amount = resolvePrice(frame ?? null, booth.defaultPrice);
     const sessionId = generateSessionId();
     const downloadToken = generateDownloadToken();
     const cfg = getEnv(this.env);

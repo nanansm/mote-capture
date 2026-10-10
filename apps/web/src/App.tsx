@@ -14,10 +14,8 @@ import FramesNewPage from "@/pages/admin/frames-new";
 import FramesDetailPage from "@/pages/admin/frames-detail";
 import SessionsPage from "@/pages/admin/sessions";
 import SessionsDetailPage from "@/pages/admin/sessions-detail";
-import PaymentsPage from "@/pages/admin/payments";
 import PaymentsTransactionsPage from "@/pages/admin/payments-transactions";
 import VoucherPage from "@/pages/admin/voucher";
-import WhatsappPage from "@/pages/admin/whatsapp";
 import SettingsPage from "@/pages/admin/settings";
 import CustomersPage from "@/pages/admin/customers";
 import ReportsPage from "@/pages/admin/reports";
@@ -42,10 +40,10 @@ export default function App() {
         <Route path="frames/:id" element={<FramesDetailPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="sessions/:id" element={<SessionsDetailPage />} />
-        <Route path="payments" element={<PaymentsPage />} />
+        <Route path="payments" element={<Navigate to="/admin/settings?section=payment" replace />} />
         <Route path="payments/transactions" element={<PaymentsTransactionsPage />} />
         <Route path="voucher" element={<VoucherPage />} />
-        <Route path="whatsapp" element={<WhatsappPage />} />
+        <Route path="whatsapp" element={<Navigate to="/admin/settings?section=whatsapp" replace />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="customers" element={<CustomersPage />} />
         <Route path="reports" element={<ReportsPage />} />

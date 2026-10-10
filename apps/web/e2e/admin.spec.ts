@@ -9,8 +9,8 @@ import { test, expect } from "@playwright/test";
 // only orders separate tests, it does not share browser context/cookies
 // between them, so a multi-test version would re-hit the login guard on
 // every step after the first.
-const ADMIN_EMAIL = "admin@example.com";
-const ADMIN_PASSWORD = "devpassword123";
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@example.com";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "devpassword123";
 
 test("admin flow: guard -> login -> dashboard -> booths -> create booth -> frames -> sessions -> detail -> voucher", async ({
   page,
@@ -57,17 +57,23 @@ test("admin flow: guard -> login -> dashboard -> booths -> create booth -> frame
     await page.goto("/admin/booths/new");
     await page.getByLabel("Name").fill(boothName);
     await page.getByLabel("Location").fill("Jakarta Selatan");
-    await page.getByLabel(/Default Price/).fill("35000");
+    await page.getByLabel(/Harga default/).fill("35000");
     await page.getByRole("button", { name: "Save" }).click();
 
-    await expect(page).toHaveURL(/\/admin\/booths$/);
-    await expect(page.getByText(boothName)).toBeVisible();
+    // Booth baru langsung ke tab Frame & Harga (hirarki booth -> frame).
+    await expect(page).toHaveURL(/\/admin\/booths\/[^/?]+\?tab=frames$/);
+    await expect(page.getByRole("heading", { name: boothName })).toBeVisible();
+    await expect(page.getByText("Kiosk belum punya frame")).toBeVisible();
     await page.screenshot({ path: "e2e/screenshots/05-booth-created.png", fullPage: true });
   });
 
   await test.step("frame list renders the seeded frame", async () => {
     await page.goto("/admin/frames");
     await expect(page.getByText("Frame E2E Test")).toBeVisible();
+    await page.goto("/admin/payments");
+    await expect(page).toHaveURL(/\/admin\/settings\?section=payment$/);
+    await page.goto("/admin/whatsapp");
+    await expect(page).toHaveURL(/\/admin\/settings\?section=whatsapp$/);
     await page.screenshot({ path: "e2e/screenshots/06-frames-list.png", fullPage: true });
   });
 

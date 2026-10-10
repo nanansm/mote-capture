@@ -73,8 +73,15 @@ export function BoothForm({
         toast.error(body.error ?? "Gagal menyimpan booth");
         return;
       }
-      toast.success(mode === "create" ? "Booth berhasil dibuat" : "Booth diperbarui");
-      navigate("/admin/booths");
+      if (mode === "create") {
+        // Booth baru langsung diarahkan ke tab Frame & Harga (hirarki booth -> frame).
+        const created = (await res.json().catch(() => ({}))) as { data?: { id?: string } };
+        toast.success("Booth dibuat. Sekarang pasang frame & harganya.");
+        navigate(created.data?.id ? `/admin/booths/${created.data.id}?tab=frames` : "/admin/booths");
+      } else {
+        toast.success("Booth diperbarui");
+        navigate("/admin/booths");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -132,7 +139,7 @@ export function BoothForm({
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="defaultPrice">
-                Default Price (Rp) <span className="text-destructive">*</span>
+                Harga default frame baru (Rp) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="defaultPrice"
@@ -143,6 +150,9 @@ export function BoothForm({
                 onChange={(e) => setDefaultPrice(Number(e.target.value))}
                 required
               />
+              <p className="text-xs text-muted-foreground">
+                Hanya isian awal saat memasang frame. Harga tiap frame diatur di tab Frame &amp; Harga.
+              </p>
             </div>
           </div>
 
@@ -184,8 +194,8 @@ export function BoothForm({
             )}
             <p className="text-xs text-muted-foreground">
               Akun dibuat di{" "}
-              <Link to="/admin/payments" className="underline">
-                Payments
+              <Link to="/admin/settings?section=payment" className="underline">
+                Settings → Pembayaran QRIS
               </Link>
               . Perubahan berlaku mulai sesi berikutnya.
             </p>

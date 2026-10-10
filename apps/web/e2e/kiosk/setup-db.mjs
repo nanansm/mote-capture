@@ -39,6 +39,9 @@ INSERT INTO frames (id, name, tier, price, layout_json, booth_id, is_active, is_
   VALUES ('${SEED.frameId}', 'Frame E2E Oranye', 'regular', ${SEED.price}, '${layout}', NULL, 1, 1, 0);
 INSERT INTO frames (id, name, tier, price, layout_json, booth_id, is_active, is_default, sort_order)
   VALUES ('${SEED.frame2Id}', 'Frame E2E Hijau', 'regular', ${SEED.price}, '${layout}', NULL, 1, 0, 1);
+INSERT INTO booth_frames (booth_id, frame_id, price, is_active, is_default, sort_order)
+  VALUES ('${SEED.boothId}', '${SEED.frameId}', ${SEED.price}, 1, 1, 0),
+         ('${SEED.boothId}', '${SEED.frame2Id}', ${SEED.price}, 1, 0, 1);
 INSERT INTO vouchers (id, code, type, value, "limit", used_count, status)
   VALUES ('VCH-E2E-FULL', '${SEED.voucherFull}', 'payment', ${SEED.price}, 1000, 0, 'active');
 `;

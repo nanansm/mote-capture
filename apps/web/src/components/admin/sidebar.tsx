@@ -2,12 +2,12 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
+  Camera,
   Cog,
   Frame as FrameIcon,
   Home,
   LogOut,
   MapPin,
-  MessageSquare,
   PieChart,
   Receipt,
   Ticket,
@@ -27,14 +27,13 @@ type NavItem = {
 const PRIMARY_NAV: NavItem[] = [
   { label: "Dashboard", href: "/admin/dashboard", icon: Home },
   { label: "Booth", href: "/admin/booths", icon: MapPin },
-  { label: "Frame", href: "/admin/frames", icon: FrameIcon },
+  { label: "Library Frame", href: "/admin/frames", icon: FrameIcon },
   { label: "Voucher", href: "/admin/voucher", icon: Ticket },
 ];
 
 const SECONDARY_NAV: NavItem[] = [
-  { label: "Sessions", href: "/admin/sessions", icon: Receipt },
-  { label: "Payments", href: "/admin/payments", icon: Receipt },
-  { label: "WhatsApp", href: "/admin/whatsapp", icon: MessageSquare },
+  { label: "Sessions", href: "/admin/sessions", icon: Camera },
+  { label: "Transaksi", href: "/admin/payments/transactions", icon: Receipt },
   { label: "Settings", href: "/admin/settings", icon: Cog },
   { label: "Reports", href: "/admin/reports", icon: PieChart, comingSoon: true },
   { label: "Customers", href: "/admin/customers", icon: Users, comingSoon: true },

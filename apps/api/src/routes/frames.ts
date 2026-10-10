@@ -9,6 +9,7 @@
 // while what's written to D1 stays the bare key.
 import { Hono } from "hono";
 import { desc, eq } from "drizzle-orm";
+import { linkFrameToBooth } from "@/routes/booths";
 import type { Bindings } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import type { AdminVariables } from "@/middleware/admin";
@@ -38,8 +39,24 @@ function toFrameResponse(row: FrameRow, cdnBase: string) {
 frames.get("/", async (c) => {
   const db = getDb(c.env.DB);
   const env = getEnv(c.env);
-  const rows = await db.select().from(schema.frames).orderBy(desc(schema.frames.createdAt));
-  return c.json({ data: rows.map((r) => toFrameResponse(r, env.PUBLIC_CDN_URL)) });
+  const [rows, links] = await Promise.all([
+    db.select().from(schema.frames).orderBy(desc(schema.frames.createdAt)),
+    db
+      .select({ frameId: schema.boothFrames.frameId, id: schema.booths.id, name: schema.booths.name, price: schema.boothFrames.price })
+      .from(schema.boothFrames)
+      .innerJoin(schema.booths, eq(schema.booths.id, schema.boothFrames.boothId))
+      .orderBy(schema.booths.name),
+  ]);
+  // "Dipakai di": booth pemakai + harga di booth itu.
+  const byFrame = new Map<string, Array<{ id: string; name: string; price: number }>>();
+  for (const l of links) {
+    const list = byFrame.get(l.frameId) ?? [];
+    list.push({ id: l.id, name: l.name, price: l.price });
+    byFrame.set(l.frameId, list);
+  }
+  return c.json({
+    data: rows.map((r) => ({ ...toFrameResponse(r, env.PUBLIC_CDN_URL), booths: byFrame.get(r.id) ?? [] })),
+  });
 });
 
 frames.post("/", async (c) => {
@@ -68,7 +85,7 @@ frames.post("/", async (c) => {
       backgroundKey: data.backgroundKey,
       logoKey: data.logoKey,
       previewKey: data.previewKey ?? data.backgroundKey,
-      boothId: data.boothId,
+      boothId: null,
       isActive: data.isActive,
       isDefault: data.isDefault,
       seasonStart: data.seasonStart ? new Date(data.seasonStart) : null,
@@ -78,7 +95,16 @@ frames.post("/", async (c) => {
     })
     .returning();
 
-  logger.info("frame_created", { id });
+  // Dibuat dari halaman booth: langsung dipasang dengan harga itu. Gagal
+  // pasang (booth hilang) -> frame tetap di library, admin diberi tahu.
+  if (data.boothId) {
+    const linked = await linkFrameToBooth(db, data.boothId, id, { price: data.price });
+    if (!linked.ok) {
+      return c.json({ error: `Frame tersimpan di library, tapi gagal dipasang: ${linked.error}` }, 400);
+    }
+  }
+
+  logger.info("frame_created", { id, boothId: data.boothId });
   return c.json({ data: toFrameResponse(created!, env.PUBLIC_CDN_URL) }, 201);
 });
 
@@ -107,8 +133,10 @@ frames.patch("/:id", async (c) => {
   const db = getDb(c.env.DB);
   const env = getEnv(c.env);
 
+  // Harga & booth diatur per booth (booth_frames), bukan di frame.
+  const { boothId: _boothId, price: _price, isDefault: _isDefault, sortOrder: _sortOrder, ...rest } = d;
   const updates: Partial<typeof schema.frames.$inferInsert> = {
-    ...d,
+    ...rest,
     seasonStart: d.seasonStart ? new Date(d.seasonStart) : d.seasonStart === null ? null : undefined,
     seasonEnd: d.seasonEnd ? new Date(d.seasonEnd) : d.seasonEnd === null ? null : undefined,
     updatedAt: new Date(),
@@ -127,6 +155,17 @@ frames.patch("/:id", async (c) => {
 frames.delete("/:id", async (c) => {
   const id = c.req.param("id");
   const db = getDb(c.env.DB);
+  const used = await db
+    .select({ name: schema.booths.name })
+    .from(schema.boothFrames)
+    .innerJoin(schema.booths, eq(schema.booths.id, schema.boothFrames.boothId))
+    .where(eq(schema.boothFrames.frameId, id));
+  if (used.length) {
+    return c.json(
+      { error: `Frame masih dipakai di ${used.map((u) => u.name).join(", ")}. Lepas dulu dari booth itu.` },
+      409,
+    );
+  }
   const [deleted] = await db.delete(schema.frames).where(eq(schema.frames.id, id)).returning();
   if (!deleted) return c.json({ error: "Frame tidak ditemukan" }, 404);
   logger.info("frame_deleted", { id });

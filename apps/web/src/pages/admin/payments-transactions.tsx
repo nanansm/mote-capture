@@ -76,7 +76,7 @@ export default function PaymentsTransactionsPage() {
           </p>
         </div>
         <Button asChild variant="outline" size="sm">
-          <Link to="/admin/payments">← Kembali ke Settings</Link>
+          <Link to="/admin/settings?section=payment">Akun pembayaran →</Link>
         </Button>
       </div>
 

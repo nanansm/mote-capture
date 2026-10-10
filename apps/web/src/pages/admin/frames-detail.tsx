@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import type { Booth, Frame } from "@capture/shared";
+import type { Frame } from "@capture/shared";
 import { FrameForm } from "@/components/admin/frame-form";
 import { ApiError, get } from "@/lib/api";
-
-type BoothOption = { id: string; name: string };
 
 type FrameRow = Omit<Frame, "seasonStart" | "seasonEnd" | "createdAt" | "updatedAt"> & {
   seasonStart: string | null;
@@ -13,20 +11,19 @@ type FrameRow = Omit<Frame, "seasonStart" | "seasonEnd" | "createdAt" | "updated
   updatedAt: string;
 };
 
-// Ported from apps/cloud/app/admin/frames/[id]/page.tsx.
+// Edit desain frame di library. Harga & booth diatur di halaman booth.
 export default function FramesDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [frame, setFrame] = useState<Frame | null>(null);
-  const [booths, setBooths] = useState<BoothOption[]>([]);
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    Promise.all([get<{ data: FrameRow }>(`/frames/${id}`), get<{ data: Booth[] }>("/booths")])
-      .then(([frameRes, boothsRes]) => {
+    get<{ data: FrameRow }>(`/frames/${id}`)
+      .then((res) => {
         if (cancelled) return;
-        const row = frameRes.data;
+        const row = res.data;
         setFrame({
           ...row,
           seasonStart: row.seasonStart ? new Date(row.seasonStart) : null,
@@ -34,7 +31,6 @@ export default function FramesDetailPage() {
           createdAt: new Date(row.createdAt),
           updatedAt: new Date(row.updatedAt),
         });
-        setBooths(boothsRes.data.map((b) => ({ id: b.id, name: b.name })));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -50,7 +46,7 @@ export default function FramesDetailPage() {
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">Frame tidak ditemukan.</p>
         <Link to="/admin/frames" className="text-sm text-brand-green-dark hover:underline">
-          ← Kembali ke daftar frame
+          ← Kembali ke Library Frame
         </Link>
       </div>
     );
@@ -61,10 +57,15 @@ export default function FramesDetailPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <h2 className="text-xl font-semibold text-brand-green-dark">Edit Frame</h2>
-        <p className="text-sm text-muted-foreground">{frame.name}</p>
+        <Link to="/admin/frames" className="text-sm text-muted-foreground hover:text-brand-green-dark">
+          ← Library Frame
+        </Link>
+        <h2 className="text-xl font-semibold text-brand-green-dark">Edit desain frame</h2>
+        <p className="text-sm text-muted-foreground">
+          {frame.name}. Perubahan desain berlaku di semua booth yang memakai frame ini.
+        </p>
       </div>
-      <FrameForm mode="edit" initial={frame} booths={booths} />
+      <FrameForm mode="edit" initial={frame} />
     </div>
   );
 }

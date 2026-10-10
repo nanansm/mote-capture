@@ -17,13 +17,9 @@ import {
 import { formatRupiah } from "@/lib/utils";
 import { displayUrl } from "@/lib/storage/r2-client";
 
-export function FrameList({
-  frames,
-  boothNames,
-}: {
-  frames: Frame[];
-  boothNames: Record<string, string>;
-}) {
+export type LibraryFrame = Frame & { booths: Array<{ id: string; name: string; price: number }> };
+
+export function FrameList({ frames }: { frames: LibraryFrame[] }) {
   // Local copy so a delete can drop the row in place instead of a full
   // `navigate(0)` reload — see BoothList for the same pattern/rationale.
   const [items, setItems] = useState(frames);
@@ -31,8 +27,12 @@ export function FrameList({
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  async function handleDelete(f: Frame) {
-    if (!confirm(`Hapus frame "${f.name}"?`)) return;
+  async function handleDelete(f: LibraryFrame) {
+    if (f.booths.length) {
+      toast.error(`Frame masih dipakai di ${f.booths.map((b) => b.name).join(", ")}. Lepas dulu dari booth itu.`);
+      return;
+    }
+    if (!confirm(`Hapus frame "${f.name}" dari library? Tindakan ini tidak bisa dibatalkan.`)) return;
     setDeletingId(f.id);
     try {
       const res = await fetch(`/api/frames/${f.id}`, { method: "DELETE" });
@@ -51,12 +51,12 @@ export function FrameList({
   if (items.length === 0) {
     return (
       <Card className="flex flex-col items-center gap-2 border-dashed py-16 text-center">
-        <p className="text-sm font-medium text-brand-green-dark">Belum ada frame</p>
-        <p className="text-sm text-muted-foreground">
-          Tambah frame pertama dengan PNG background dan logo opsional.
+        <p className="text-sm font-medium text-brand-green-dark">Library masih kosong</p>
+        <p className="max-w-sm text-sm text-muted-foreground">
+          Cara tercepat: buka booth, tab Frame &amp; Harga, lalu Unggah frame baru. Frame otomatis masuk ke sini.
         </p>
         <Button asChild variant="brand" className="mt-2">
-          <Link to="/admin/frames/new">+ Frame Baru</Link>
+          <Link to="/admin/booths">Buka Booth</Link>
         </Button>
       </Card>
     );
@@ -69,24 +69,18 @@ export function FrameList({
           <TableRow>
             <TableHead className="w-[80px]">Preview</TableHead>
             <TableHead>Nama</TableHead>
-            <TableHead className="hidden md:table-cell">Tier</TableHead>
-            <TableHead>Harga</TableHead>
-            <TableHead className="hidden lg:table-cell">Booth</TableHead>
-            <TableHead>Status</TableHead>
+            <TableHead>Dipakai di</TableHead>
+            <TableHead className="hidden md:table-cell">Status</TableHead>
             <TableHead className="text-right">Aksi</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {items.map((f) => (
-            <TableRow key={f.id}>
+            <TableRow key={f.id} className={f.isActive ? "" : "bg-muted/30 text-muted-foreground"}>
               <TableCell>
                 {f.previewUrl ? (
                   <div className="relative h-12 w-12 overflow-hidden rounded-md border bg-muted">
-                    <img
-                      src={displayUrl(f.previewUrl)}
-                      alt={f.name}
-                      className="h-full w-full object-cover"
-                    />
+                    <img src={displayUrl(f.previewUrl)} alt={f.name} className="h-full w-full object-cover" />
                   </div>
                 ) : (
                   <div className="h-12 w-12 rounded-md border bg-muted" />
@@ -94,27 +88,34 @@ export function FrameList({
               </TableCell>
               <TableCell>
                 <div className="font-medium text-brand-green-dark">{f.name}</div>
-                {f.isDefault ? (
-                  <Badge variant="warn" className="mt-1 text-[10px]">
-                    Default
-                  </Badge>
-                ) : null}
-              </TableCell>
-              <TableCell className="hidden md:table-cell capitalize">{f.tier}</TableCell>
-              <TableCell>{formatRupiah(f.price)}</TableCell>
-              <TableCell className="hidden lg:table-cell text-sm">
-                {f.boothId ? boothNames[f.boothId] ?? f.boothId : "All Booths"}
+                <div className="text-xs capitalize text-muted-foreground">{f.tier}</div>
               </TableCell>
               <TableCell>
+                {f.booths.length ? (
+                  <ul className="space-y-0.5 text-sm">
+                    {f.booths.map((b) => (
+                      <li key={b.id}>
+                        <Link to={`/admin/booths/${b.id}?tab=frame`} className="hover:underline">
+                          {b.name}
+                        </Link>{" "}
+                        <span className="font-medium tabular-nums">· {formatRupiah(b.price)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="text-sm text-muted-foreground">Belum dipasang</span>
+                )}
+              </TableCell>
+              <TableCell className="hidden md:table-cell">
                 {f.isActive ? (
                   <Badge variant="success">Aktif</Badge>
                 ) : (
-                  <Badge variant="secondary">Nonaktif</Badge>
+                  <Badge variant="warn">Diarsipkan · tidak tampil</Badge>
                 )}
               </TableCell>
               <TableCell className="text-right">
                 <div className="inline-flex gap-1">
-                  <Button asChild variant="ghost" size="icon" aria-label="Edit">
+                  <Button asChild variant="ghost" size="icon" aria-label={`Edit desain ${f.name}`} title="Edit desain">
                     <Link to={`/admin/frames/${f.id}`}>
                       <Pencil className="h-4 w-4" />
                     </Link>
@@ -122,11 +123,12 @@ export function FrameList({
                   <Button
                     variant="ghost"
                     size="icon"
-                    aria-label="Hapus"
+                    aria-label={`Hapus ${f.name}`}
+                    title={f.booths.length ? "Lepas dari semua booth dulu" : "Hapus dari library"}
                     onClick={() => handleDelete(f)}
                     disabled={deletingId === f.id}
                   >
-                    <Trash2 className="h-4 w-4 text-destructive" />
+                    <Trash2 className={f.booths.length ? "h-4 w-4 text-muted-foreground" : "h-4 w-4 text-destructive"} />
                   </Button>
                 </div>
               </TableCell>

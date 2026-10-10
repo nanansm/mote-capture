@@ -23,10 +23,14 @@ export const frameInputSchema = z.object({
   tier: z.enum(["regular", "premium"], {
     errorMap: () => ({ message: "Tier tidak valid" }),
   }),
+  // Harga dipakai saat frame dibuat dari halaman booth (boothId terisi);
+  // harga sebenarnya disimpan per booth di booth_frames.
   price: z
     .number({ invalid_type_error: "Harga harus berupa angka" })
     .int("Harga harus bilangan bulat")
-    .min(1000, "Harga minimal Rp1.000"),
+    .min(1000, "Harga minimal Rp1.000")
+    .max(10_000_000, "Harga terlalu besar")
+    .optional(),
   backgroundKey: z.string().min(1, "Background PNG wajib diunggah"),
   logoKey: z
     .string()
@@ -43,8 +47,8 @@ export const frameInputSchema = z.object({
     .optional()
     .nullable()
     .transform((v) => (v === undefined || v === "" ? null : v)),
-  isActive: z.boolean(),
-  isDefault: z.boolean(),
+  isActive: z.boolean().default(true),
+  isDefault: z.boolean().default(false),
   seasonStart: z
     .string()
     .optional()

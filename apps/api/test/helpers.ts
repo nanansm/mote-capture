@@ -62,7 +62,29 @@ export async function seedFrame(
       over.isActive === false ? 0 : 1,
     )
     .run();
+  // 0004: frame tampil di booth hanya lewat booth_frames.
+  if (over.boothId) await linkFrame(over.boothId, id, { price: over.price ?? 30000 });
   return id;
+}
+
+export async function linkFrame(
+  boothId: string,
+  frameId: string,
+  over: Partial<{ price: number; isActive: boolean; isDefault: boolean; sortOrder: number }> = {},
+) {
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO booth_frames (booth_id, frame_id, price, is_active, is_default, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      boothId,
+      frameId,
+      over.price ?? 30000,
+      over.isActive === false ? 0 : 1,
+      over.isDefault ? 1 : 0,
+      over.sortOrder ?? 0,
+    )
+    .run();
 }
 
 export async function seedSession(

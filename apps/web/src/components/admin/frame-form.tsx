@@ -15,16 +15,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatRupiah } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { DEFAULT_LAYOUT_V2, isLayoutV2 } from "@capture/shared";
-import { frameInputSchema } from "@/lib/validations/frame";
+import { frameInputSchema, frameUpdateSchema } from "@/lib/validations/frame";
 import { displayUrl, urlToKey } from "@/lib/storage/r2-client";
 
 type Mode = "create" | "edit";
 
-type BoothOption = { id: string; name: string };
-
-const NO_BOOTH = "__all__";
+// Booth asal saat frame dibuat dari halaman booth: frame langsung dipasang
+// di booth itu dengan harga yang diisi di sini.
+export type TargetBooth = { id: string; name: string; defaultPrice: number };
 
 function isoToInputDate(value: Date | string | null | undefined): string {
   if (!value) return "";
@@ -36,21 +37,16 @@ function isoToInputDate(value: Date | string | null | undefined): string {
 export function FrameForm({
   mode,
   initial,
-  booths,
+  targetBooth,
 }: {
   mode: Mode;
   initial?: Frame;
-  booths: BoothOption[];
+  targetBooth?: TargetBooth | null;
 }) {
   const navigate = useNavigate();
   const [name, setName] = useState(initial?.name ?? "");
   const [tier, setTier] = useState<"regular" | "premium">(initial?.tier ?? "regular");
-  const [price, setPrice] = useState<number>(
-    initial?.price ?? FRAME_TIERS.regular.defaultPrice,
-  );
-  const [overridePrice, setOverridePrice] = useState<boolean>(
-    initial ? initial.price !== FRAME_TIERS[initial.tier].defaultPrice : false,
-  );
+  const [price, setPrice] = useState<number>(targetBooth?.defaultPrice ?? FRAME_TIERS.regular.defaultPrice);
   const [backgroundUrl, setBackgroundUrl] = useState(initial?.backgroundUrl ?? "");
   // The R2 object *key* is what actually gets submitted to the server
   // (apps/api/src/lib/validations/frame.ts stores keys, not URLs) — derived
@@ -61,12 +57,9 @@ export function FrameForm({
   );
   const [logoUrl, setLogoUrl] = useState(initial?.logoUrl ?? "");
   const [logoKey, setLogoKey] = useState(initial?.logoUrl ? urlToKey(initial.logoUrl) : "");
-  const [boothId, setBoothId] = useState<string>(initial?.boothId ?? NO_BOOTH);
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
-  const [isDefault, setIsDefault] = useState(initial?.isDefault ?? false);
   const [seasonStart, setSeasonStart] = useState(isoToInputDate(initial?.seasonStart));
   const [seasonEnd, setSeasonEnd] = useState(isoToInputDate(initial?.seasonEnd));
-  const [sortOrder, setSortOrder] = useState<number>(initial?.sortOrder ?? 0);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingBg, setUploadingBg] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
@@ -79,12 +72,7 @@ export function FrameForm({
   );
   const [layoutError, setLayoutError] = useState<string | null>(null);
 
-  function handleTierChange(v: "regular" | "premium") {
-    setTier(v);
-    if (!overridePrice) {
-      setPrice(FRAME_TIERS[v].defaultPrice);
-    }
-  }
+  const backTo = targetBooth ? `/admin/booths/${targetBooth.id}?tab=frame` : "/admin/frames";
 
   async function uploadImage(
     file: File,
@@ -161,19 +149,16 @@ export function FrameForm({
     const payload = {
       name: name.trim(),
       tier,
-      price: Number(price),
+      ...(mode === "create" && targetBooth ? { price: Number(price), boothId: targetBooth.id } : {}),
       backgroundKey,
       logoKey: logoKey || null,
       previewKey: backgroundKey, // Sprint 1: preview = background
-      boothId: boothId === NO_BOOTH ? null : boothId,
       isActive,
-      isDefault,
       seasonStart: seasonStart || null,
       seasonEnd: seasonEnd || null,
-      sortOrder: Number(sortOrder),
       layoutJson,
     };
-    const parsed = frameInputSchema.safeParse(payload);
+    const parsed = (mode === "create" ? frameInputSchema : frameUpdateSchema).safeParse(payload);
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? "Validasi gagal");
       return;
@@ -193,8 +178,14 @@ export function FrameForm({
         toast.error(body.error ?? "Gagal menyimpan frame");
         return;
       }
-      toast.success(mode === "create" ? "Frame berhasil dibuat" : "Frame diperbarui");
-      navigate("/admin/frames");
+      toast.success(
+        mode === "create"
+          ? targetBooth
+            ? `Frame dipasang di ${targetBooth.name} (${formatRupiah(Number(price))})`
+            : "Frame masuk library. Pasang ke booth dari halaman booth."
+          : "Frame diperbarui",
+      );
+      navigate(backTo);
     } finally {
       setSubmitting(false);
     }
@@ -219,42 +210,44 @@ export function FrameForm({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
-              <Label htmlFor="tier">Tier</Label>
-              <Select
-                value={tier}
-                onValueChange={(v) => handleTierChange(v as "regular" | "premium")}
-              >
+              <Label htmlFor="tier">Kategori</Label>
+              <Select value={tier} onValueChange={(v) => setTier(v as "regular" | "premium")}>
                 <SelectTrigger id="tier">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {Object.entries(FRAME_TIERS).map(([k, v]) => (
                     <SelectItem key={k} value={k}>
-                      {v.label} (Rp{v.defaultPrice.toLocaleString("id-ID")})
+                      {v.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="price">
-                Harga (Rp) {overridePrice ? "" : <span className="text-muted-foreground text-xs">— mengikuti tier</span>}
-              </Label>
-              <div className="flex items-center gap-2">
+            {mode === "create" && targetBooth ? (
+              <div className="grid gap-2">
+                <Label htmlFor="price">
+                  Harga di {targetBooth.name} (Rp) <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="price"
-                  type="number"
-                  min={1000}
-                  step={1000}
-                  value={price}
-                  disabled={!overridePrice}
-                  onChange={(e) => setPrice(Number(e.target.value))}
+                  type="text"
+                  inputMode="numeric"
+                  className="tabular-nums"
+                  value={price ? price.toLocaleString("id-ID") : ""}
+                  onChange={(e) => setPrice(Number(e.target.value.replace(/\D/g, "").slice(0, 8) || "0"))}
+                  required
                 />
-                <Switch checked={overridePrice} onCheckedChange={setOverridePrice} aria-label="Custom price" />
+                <p className="text-xs text-muted-foreground">Khusus booth ini. Bisa diubah nanti di tab Frame &amp; Harga.</p>
               </div>
-            </div>
+            ) : null}
           </div>
+          {!targetBooth ? (
+            <p className="-mt-2 text-xs text-muted-foreground">
+              Harga diatur per booth, di halaman <span className="font-medium">Booth → Frame &amp; Harga</span>.
+            </p>
+          ) : null}
 
           {/* Background upload */}
           <div className="grid gap-2">
@@ -332,42 +325,17 @@ export function FrameForm({
             </div>
           </div>
 
-          <div className="grid gap-2">
-            <Label htmlFor="booth">Booth Target</Label>
-            <Select value={boothId} onValueChange={setBoothId}>
-              <SelectTrigger id="booth">
-                <SelectValue placeholder="All Booths" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NO_BOOTH}>All Booths</SelectItem>
-                {booths.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>
-                    {b.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Pilih booth tertentu untuk membatasi frame ini, atau biarkan All Booths.
-            </p>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex items-center justify-between rounded-md border border-input p-3">
-              <div>
-                <p className="text-sm font-medium">Active</p>
-                <p className="text-xs text-muted-foreground">Tampilkan frame di kiosk.</p>
-              </div>
-              <Switch checked={isActive} onCheckedChange={setIsActive} />
+          {mode === "edit" ? (
+          <div className="flex items-center justify-between rounded-md border border-input p-3">
+            <div>
+              <p className="text-sm font-medium">Aktif</p>
+              <p className="text-xs text-muted-foreground">
+                Matikan untuk mengarsipkan frame di semua booth sekaligus.
+              </p>
             </div>
-            <div className="flex items-center justify-between rounded-md border border-input p-3">
-              <div>
-                <p className="text-sm font-medium">Default Frame</p>
-                <p className="text-xs text-muted-foreground">Pilihan utama saat sesi baru.</p>
-              </div>
-              <Switch checked={isDefault} onCheckedChange={setIsDefault} />
-            </div>
+            <Switch checked={isActive} onCheckedChange={setIsActive} aria-label="Frame aktif" />
           </div>
+          ) : null}
 
           <div className="rounded-md border border-input p-3">
             <button
@@ -382,7 +350,7 @@ export function FrameForm({
                   {initialIsV1 ? " Frame ini masih layout lama (v1), tersembunyi di kiosk sampai disimpan dengan v2." : ""}
                 </p>
               </div>
-              <span className="text-xs text-muted-foreground">{layoutOpen ? "Hide" : "Show"}</span>
+              <span className="text-xs text-muted-foreground">{layoutOpen ? "Tutup" : "Atur"}</span>
             </button>
             {layoutOpen ? (
               <div className="mt-3 grid gap-2">
@@ -406,9 +374,9 @@ export function FrameForm({
             ) : null}
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
-              <Label htmlFor="seasonStart">Season Start</Label>
+              <Label htmlFor="seasonStart">Tampil mulai (opsional)</Label>
               <Input
                 id="seasonStart"
                 type="date"
@@ -417,22 +385,12 @@ export function FrameForm({
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="seasonEnd">Season End</Label>
+              <Label htmlFor="seasonEnd">Tampil sampai (opsional)</Label>
               <Input
                 id="seasonEnd"
                 type="date"
                 value={seasonEnd}
                 onChange={(e) => setSeasonEnd(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="sortOrder">Sort Order</Label>
-              <Input
-                id="sortOrder"
-                type="number"
-                min={0}
-                value={sortOrder}
-                onChange={(e) => setSortOrder(Number(e.target.value))}
               />
             </div>
           </div>
@@ -443,14 +401,14 @@ export function FrameForm({
         <Button
           type="button"
           variant="outline"
-          onClick={() => navigate("/admin/frames")}
+          onClick={() => navigate(backTo)}
           disabled={submitting}
         >
-          Cancel
+          Batal
         </Button>
         <Button type="submit" variant="brand" disabled={submitting}>
           {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Save
+          {mode === "create" ? (targetBooth ? "Simpan & pasang" : "Simpan ke library") : "Simpan"}
         </Button>
       </div>
     </form>

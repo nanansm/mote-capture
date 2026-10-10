@@ -43,18 +43,23 @@ kiosk.get("/boot", async (c) => {
   }
 
   const now = new Date();
+  // 0004: daftar & harga frame per booth dari booth_frames. Frame harus
+  // aktif di booth ini DAN tidak diarsipkan global (frames.is_active).
   const frameRows = await db
-    .select()
-    .from(schema.frames)
+    .select({ f: schema.frames, bf: schema.boothFrames })
+    .from(schema.boothFrames)
+    .innerJoin(schema.frames, eq(schema.frames.id, schema.boothFrames.frameId))
     .where(
       and(
+        eq(schema.boothFrames.boothId, boothId),
+        eq(schema.boothFrames.isActive, true),
         eq(schema.frames.isActive, true),
-        or(isNull(schema.frames.boothId), eq(schema.frames.boothId, boothId)),
         or(isNull(schema.frames.seasonStart), lte(schema.frames.seasonStart, now)),
         or(isNull(schema.frames.seasonEnd), gte(schema.frames.seasonEnd, now)),
       ),
     )
-    .orderBy(asc(schema.frames.sortOrder), desc(schema.frames.createdAt));
+    .orderBy(asc(schema.boothFrames.sortOrder), desc(schema.frames.createdAt))
+    .then((rows) => rows.map(({ f, bf }) => ({ ...f, price: bf.price, isDefault: bf.isDefault, sortOrder: bf.sortOrder })));
 
   // Hanya frame layout v2 (PRD bagian 8 #14). Frame v1 (strip 2×3) tidak
   // bisa dicompose agent, jadi disaring di sini, bukan dibiarkan gagal di booth.
@@ -83,7 +88,7 @@ kiosk.get("/boot", async (c) => {
       backgroundUrl: f.backgroundKey ? getPublicUrl(env.PUBLIC_CDN_URL, f.backgroundKey) : null,
       previewUrl: f.previewKey ? getPublicUrl(env.PUBLIC_CDN_URL, f.previewKey) : null,
       logoUrl: f.logoKey ? getPublicUrl(env.PUBLIC_CDN_URL, f.logoKey) : null,
-      boothId: f.boothId,
+      boothId,
       isDefault: f.isDefault,
       sortOrder: f.sortOrder,
       layoutJson: f.layoutJson as KioskBootData["frames"][number]["layoutJson"],

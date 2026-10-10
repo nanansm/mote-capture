@@ -451,29 +451,29 @@ export function PaymentAccountsManager() {
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardContent className="space-y-2 pt-5 text-sm">
-          <p className="font-medium">Cara pakai (3 langkah)</p>
+      <details open={accounts !== null && accounts.length === 0} className="rounded-md border bg-muted/20 p-3 text-sm">
+        <summary className="cursor-pointer font-medium">Cara pakai (3 langkah)</summary>
+        <div className="space-y-2 pt-2">
           <ol className="list-decimal space-y-1 pl-5">
             <li>
               <b>Tambah akun</b>: pilih Xendit atau iPaymu, tempel key dari dashboard provider.
             </li>
             <li>
-              Klik <b>Tes koneksi</b> sampai status <i className="not-italic underline">Terhubung</i>.
+              Klik <b>Tes koneksi</b> sampai status <b>Terhubung</b>.
             </li>
             <li>
               Buka{" "}
               <Link to="/admin/booths" className="underline">
-                Booths → Edit
+                Booth
               </Link>
-              , pilih akun ini di <b>Akun pembayaran</b>. Berlaku mulai sesi berikutnya.
+              , pilih booth, tab <b>Info &amp; Pembayaran</b>, pilih akun ini. Berlaku mulai sesi berikutnya.
             </li>
           </ol>
-          <p className="text-xs text-muted-foreground">
-            Booth tanpa akun tetap bisa dipakai dengan voucher, tapi tombol bayar QRIS ditolak.
+          <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+            Booth tanpa akun tetap bisa dipakai dengan voucher, tapi pembayaran QRIS ditolak.
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </details>
 
       {!encryptionConfigured ? (
         <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
