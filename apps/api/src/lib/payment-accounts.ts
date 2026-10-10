@@ -90,6 +90,8 @@ export function buildProvider(
       apiKey: secrets.apiKey,
       mode: row.mode === "sandbox" ? "sandbox" : "production",
       notifyUrl: webhookUrlFor(env, "ipaymu", row.id),
+      relayUrl: env.IPAYMU_RELAY_URL,
+      relayToken: env.IPAYMU_RELAY_TOKEN,
     });
   }
   if (row.provider === "xendit") {

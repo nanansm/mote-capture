@@ -86,6 +86,24 @@ describe("iPaymu signature", () => {
     expect(sent!.headers.get("signature")).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("relay terpasang: request lewat relay + token + mode, signature tetap dari Worker", async () => {
+    let sent: { url: string; headers: Headers } | undefined;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      sent = { url: String(input), headers: new Headers(init?.headers) };
+      return Response.json({ Status: 200, Data: { TransactionId: 1, QrString: "000201R" } });
+    });
+    const p = new IpaymuProvider({
+      va: VA, apiKey: "k", mode: "production", notifyUrl: "https://x",
+      relayUrl: "https://relay.example/", relayToken: "t".repeat(64),
+    });
+    await p.createQR({ sessionId: "SES-R", amount: 1000 });
+    spy.mockRestore();
+    expect(sent!.url).toBe("https://relay.example/v2/payment/direct");
+    expect(sent!.headers.get("x-relay-token")).toBe("t".repeat(64));
+    expect(sent!.headers.get("x-ipaymu-mode")).toBe("production");
+    expect(sent!.headers.get("signature")).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("createQR gagal = error jelas, bukan QR kosong", async () => {
     const spy = vi
       .spyOn(globalThis, "fetch")

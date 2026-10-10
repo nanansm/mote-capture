@@ -1,0 +1,12 @@
+http: # v2
+  routers:
+    ipaymu-relay:
+      rule: "Host(`ipaymu-relay.motekreatif.com`)"
+      entryPoints: [https]
+      service: ipaymu-relay
+      tls: { certResolver: letsencrypt }
+  services:
+    ipaymu-relay:
+      loadBalancer:
+        servers:
+          - url: "http://mote_ipaymu-relay:8787"

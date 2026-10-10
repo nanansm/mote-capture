@@ -33,6 +33,10 @@ export type IpaymuCredentials = {
   apiKey?: string;
   mode?: IpaymuMode;
   notifyUrl?: string;
+  // Relay ber-IP tetap (whitelist iPaymu). Worker Cloudflare tidak punya IP
+  // statis; tanpa relay, /payment/direct ditolak "406 Invalid IP".
+  relayUrl?: string;
+  relayToken?: string;
 };
 
 export const IPAYMU_BASE_URL: Record<IpaymuMode, string> = {
@@ -146,8 +150,12 @@ export class IpaymuProvider implements PaymentProvider {
   private readonly apiKey?: string;
   private readonly mode: IpaymuMode;
   private readonly notifyUrl?: string;
+  private readonly relayUrl?: string;
+  private readonly relayToken?: string;
 
   constructor(c: IpaymuCredentials) {
+    this.relayUrl = c.relayUrl?.trim().replace(/\/+$/, "") || undefined;
+    this.relayToken = c.relayToken?.trim() || undefined;
     this.va = c.va?.trim() || undefined;
     this.apiKey = c.apiKey?.trim() || undefined;
     this.mode = c.mode === "sandbox" ? "sandbox" : "production";
@@ -161,17 +169,20 @@ export class IpaymuProvider implements PaymentProvider {
   private async call(path: string, payload: Record<string, unknown>): Promise<{ status: number; json: Record<string, unknown>; text: string }> {
     const body = JSON.stringify(payload);
     const signature = await ipaymuRequestSignature("POST", this.va!, this.apiKey!, body);
-    const res = await fetch(`${IPAYMU_BASE_URL[this.mode]}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-        va: this.va!,
-        signature,
-        timestamp: ipaymuTimestamp(),
-      },
-      body,
-    });
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      accept: "application/json",
+      va: this.va!,
+      signature,
+      timestamp: ipaymuTimestamp(),
+    };
+    const useRelay = Boolean(this.relayUrl && this.relayToken);
+    if (useRelay) {
+      headers["x-relay-token"] = this.relayToken!;
+      headers["x-ipaymu-mode"] = this.mode;
+    }
+    const url = useRelay ? `${this.relayUrl}/v2${path}` : `${IPAYMU_BASE_URL[this.mode]}${path}`;
+    const res = await fetch(url, { method: "POST", headers, body });
     const text = await res.text();
     let json: Record<string, unknown> = {};
     try {

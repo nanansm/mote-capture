@@ -27,6 +27,8 @@ export type Bindings = {
   ASSETS: Fetcher;
   PUBLIC_CDN_URL: string;
   APP_URL: string;
+  IPAYMU_RELAY_URL?: string;
+  IPAYMU_RELAY_TOKEN?: string;
   DOWNLOAD_LINK_EXPIRY_DAYS: string;
   // Optional: not every wrangler.jsonc env needs to set these (falls back to
   // onboarding@resend.dev / "Mote Capture" in src/lib/email.ts).
