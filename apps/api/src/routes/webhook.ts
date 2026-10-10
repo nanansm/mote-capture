@@ -31,7 +31,7 @@ const webhook = new Hono<{ Bindings: Bindings }>();
 
 const PAID_TERMINAL_STATUSES = new Set(["paid", "capturing", "processing", "done", "abandoned_paid", "stale"]);
 
-type ProviderName = "xendit" | "ipaymu";
+type ProviderName = "xendit" | "ipaymu" | "doku";
 type Ctx = Context<{ Bindings: Bindings }>;
 
 // Alur bersama setelah callback lolos verifikasi provider. Hanya membaca
@@ -74,6 +74,21 @@ async function handleVerified(c: Ctx, provider: ProviderName, accountId: string,
     if (verification.event === "paid" && typeof verification.amount === "number" && verification.amount < session.amount) {
       await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "amount_mismatch", payload: rawPayload });
       logger.warn("ipaymu_webhook_amount_mismatch", { sessionId, paid: verification.amount, expected: session.amount });
+      return c.json({ ok: true, message: "amount mismatch" });
+    }
+  }
+
+  // DOKU: invoice wajib sama dengan yang dibuat untuk sesi ini, nominal lunas
+  // tidak boleh kurang dari harga sesi.
+  if (provider === "doku") {
+    if (session.paymentProvider !== "doku" || (session.paymentRef && rawPayload?.invoice !== session.paymentRef)) {
+      await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "reference_mismatch", payload: rawPayload });
+      logger.warn("doku_webhook_reference_mismatch", { sessionId });
+      return c.json({ ok: true, message: "reference mismatch" });
+    }
+    if (verification.event === "paid" && typeof verification.amount === "number" && verification.amount > 0 && verification.amount < session.amount) {
+      await db.insert(schema.paymentLogs).values({ sessionId, provider, eventType: "amount_mismatch", payload: rawPayload });
+      logger.warn("doku_webhook_amount_mismatch", { sessionId, paid: verification.amount, expected: session.amount });
       return c.json({ ok: true, message: "amount mismatch" });
     }
   }
@@ -215,6 +230,29 @@ webhook.post("/ipaymu", async (c) => {
     account = await loadAccount(db, c.env, s?.accountId);
   }
   return ipaymuHandle(c, account, rawBody);
+});
+
+// DOKU: Notification URL per akun (ditempel admin di Back Office DOKU).
+// Signature HMAC dicek dengan Secret Key akun itu; Request-Target = path URL
+// ini. Status lunas dikonfirmasi ulang lewat API Check Status DOKU.
+webhook.post("/doku/:accountId", async (c) => {
+  const rawBody = await c.req.text();
+  const db = getDb(c.env.DB);
+  const account = await loadAccount(db, c.env, c.req.param("accountId"));
+  if (!account || account.row.provider !== "doku") {
+    logger.warn("doku_webhook_unknown_account", { accountId: c.req.param("accountId") });
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+  const verification = await account.provider.verifyWebhook({
+    headers: lowerHeaders(c),
+    body: rawBody,
+    path: new URL(c.req.url).pathname,
+  });
+  if (!verification.valid) {
+    logger.warn("doku_invalid_webhook", { reason: verification.reason, accountId: account.row.id });
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+  return handleVerified(c, "doku", account.row.id, verification);
 });
 
 export default webhook;

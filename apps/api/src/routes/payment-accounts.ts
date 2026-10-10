@@ -41,13 +41,15 @@ const trimmed = (max: number) =>
 const secretsSchema = z.object({
   secretKey: trimmed(500),
   webhookToken: trimmed(500),
+  clientId: trimmed(80).refine((v) => !v || /^[A-Za-z0-9-]+$/.test(v), "Client ID DOKU hanya huruf, angka, dan tanda -"),
+  dokuSecretKey: trimmed(200),
   va: trimmed(40).refine((v) => !v || /^\d+$/.test(v), "Nomor VA iPaymu hanya angka"),
   apiKey: trimmed(300),
 });
 
 const createSchema = z.object({
   name: z.string().trim().min(1, "Nama akun wajib diisi").max(80),
-  provider: z.enum(["xendit", "ipaymu"], { errorMap: () => ({ message: "Pilih Xendit atau iPaymu" }) }),
+  provider: z.enum(["xendit", "ipaymu", "doku"], { errorMap: () => ({ message: "Pilih Xendit, iPaymu, atau DOKU" }) }),
   mode: z.enum(["production", "sandbox"]).default("production"),
   secrets: secretsSchema,
 });
@@ -62,6 +64,8 @@ const FIELD_LABEL: Record<keyof AccountSecrets, string> = {
   secretKey: "Secret Key",
   webhookToken: "Webhook Token",
   va: "Nomor VA",
+  clientId: "Client ID",
+  dokuSecretKey: "Secret Key",
   apiKey: "API Key",
 };
 
@@ -88,6 +92,16 @@ function formatProblem(provider: PaymentProviderName, mode: string, s: AccountSe
       return "Key xnd_development_ adalah key uji. Pilih Mode Sandbox, atau pakai key xnd_production_.";
     if (mode === "sandbox" && s.secretKey.startsWith("xnd_production_"))
       return "Key xnd_production_ adalah uang asli. Pilih Mode Production.";
+  }
+  if (provider === "doku" && s.clientId) {
+    // Format resmi: BRN-xxxx-... (akun baru) atau MCH-xxxx-... (akun lama).
+    if (!/^(BRN|MCH)-\d{4}-\d+$/i.test(s.clientId))
+      return "Client ID DOKU berbentuk BRN-0000-0000000000000 (atau MCH-...). Salin dari Back Office DOKU, menu Integrations → API Keys.";
+  }
+  if (provider === "doku" && s.dokuSecretKey) {
+    if (s.dokuSecretKey.startsWith("-----BEGIN"))
+      return "Itu RSA key. Yang dibutuhkan Active Secret Key (diawali SK-).";
+    if (!/^SK-/i.test(s.dokuSecretKey)) return "Active Secret Key DOKU diawali SK-. Salin dari Back Office DOKU, menu Integrations → API Keys.";
   }
   return null;
 }

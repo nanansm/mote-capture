@@ -224,3 +224,66 @@ describe("sesi QRIS per booth", () => {
     expect((await getSessionRow(sessions[1]!))?.payment_account_id).toBe(accB);
   });
 });
+
+describe("akun DOKU", () => {
+  const SK = "SK-RAHASIA-DOKU-1234567890";
+  it("buat akun DOKU: Notification URL per akun, Secret Key tidak bocor", async () => {
+    const res = await admin("/payment-accounts", "POST", {
+      name: "DOKU Maja",
+      provider: "doku",
+      mode: "sandbox",
+      secrets: { clientId: "BRN-0214-1714016624673", dokuSecretKey: SK },
+    });
+    expect(res.status).toBe(201);
+    const raw = await res.text();
+    expect(raw).not.toContain(SK);
+    const { data } = JSON.parse(raw) as { data: Acc };
+    expect(data.masked.clientId).toBe("BRN-0214-1714016624673");
+    expect(data.webhookUrl).toMatch(new RegExp(`/api/webhook/doku/${data.id}$`));
+    expect(data.complete).toBe(true);
+  });
+
+  it("Client ID format salah ditolak", async () => {
+    const res = await admin("/payment-accounts", "POST", {
+      name: "x", provider: "doku", mode: "sandbox", secrets: { clientId: "12345", dokuSecretKey: SK },
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/BRN-/);
+  });
+
+  it("salah tempel RSA / key tanpa SK- ditolak", async () => {
+    for (const k of ["-----BEGIN PUBLIC KEY-----abc", "xnd_development_abc"]) {
+      const res = await admin("/payment-accounts", "POST", {
+        name: "x", provider: "doku", mode: "sandbox", secrets: { clientId: "BRN-0214-1714016624673", dokuSecretKey: k },
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("Secret Key wajib", async () => {
+    const res = await admin("/payment-accounts", "POST", {
+      name: "x", provider: "doku", mode: "sandbox", secrets: { clientId: "BRN-0214-1714016624673" },
+    });
+    expect(((await res.json()) as { error: string }).error).toMatch(/Secret Key/);
+  });
+
+  it("booth DOKU: kiosk menerima paymentUrl halaman QRIS DOKU", async () => {
+    const acc = await seedPaymentAccount({ provider: "doku", mode: "sandbox", secrets: { clientId: "BRN-0214-1714016624673", dokuSecretKey: SK } });
+    const boothId = await seedBooth({ id: uid("BTH") });
+    await useAccount(boothId, acc, "doku");
+    const frameId = await seedFrame({ boothId });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ response: { payment: { url: "https://sandbox.doku.com/checkout-link-v2/zz" } } }),
+    );
+    const k = await openKiosk(boothId);
+    const r = (await k.request(SocketEvents.CONFIRM_AND_PAY, { boothId, frameId, method: "qris" })) as {
+      ok: boolean;
+      data?: { sessionId: string; paymentUrl: string | null };
+    };
+    k.close();
+    expect(r).toMatchObject({ ok: true });
+    expect(r.data!.paymentUrl).toBe("https://sandbox.doku.com/checkout-link-v2/zz");
+    const row = await getSessionRow(r.data!.sessionId);
+    expect(row).toMatchObject({ payment_provider: "doku", payment_account_id: acc, payment_ref: r.data!.sessionId.replace("-", "") });
+  });
+});

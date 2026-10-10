@@ -4,7 +4,7 @@ export type Booth = {
   location: string | null;
   defaultPrice: number;
   // Diturunkan dari akun pembayaran booth; jangan diubah langsung.
-  paymentProvider: "ipaymu" | "xendit";
+  paymentProvider: "ipaymu" | "xendit" | "doku";
   // null = QRIS belum diatur (booth hanya bisa voucher).
   paymentAccountId: string | null;
   bridgeToken: string;

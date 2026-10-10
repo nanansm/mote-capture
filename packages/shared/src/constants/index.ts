@@ -39,6 +39,7 @@ export const SESSION_STATUS_VARIANT: Record<
 export const PAYMENT_PROVIDERS = [
   { value: "ipaymu", label: "iPaymu" },
   { value: "xendit", label: "Xendit" },
+  { value: "doku", label: "DOKU" },
 ] as const;
 
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB

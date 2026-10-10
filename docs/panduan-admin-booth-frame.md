@@ -5,10 +5,14 @@ Untuk admin Capture (`capture.motekreatif.com/admin`). Urutan kerja: **booth dul
 ## 1. Pasang akun pembayaran (sekali per akun)
 
 1. Buka **Settings**, lalu buka bagian **Pembayaran QRIS**.
-2. Klik **Tambah akun**. Pilih Xendit atau iPaymu, lalu isi kunci dari dashboard provider.
+2. Klik **Tambah akun**. Pilih Xendit, iPaymu, atau DOKU, lalu isi kunci dari dashboard provider.
    - Xendit: Secret Key (bukan Public Key) dan Webhook Token.
    - iPaymu: VA dan API Key.
-3. Klik **Tes koneksi** sampai status **Terhubung**.
+   - DOKU: Client ID (`BRN-...`) dan Active Secret Key (`SK-...`), dari Back Office DOKU menu **Integrations → API Keys**. Sandbox dan Production punya Client ID berbeda.
+3. Khusus DOKU: salin **Notification URL** dari kartu akun, tempel di Back Office DOKU menu **Settings → Payment Settings → QRIS**, lalu Simpan.
+4. Klik **Tes koneksi** sampai status **Terhubung**.
+
+Di booth DOKU, layar menampilkan halaman QRIS DOKU. Sesi foto baru terbuka setelah status bayar dicek ulang ke DOKU.
 
 Satu akun boleh dipakai beberapa booth.
 

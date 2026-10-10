@@ -13,14 +13,15 @@ import { schema } from "@/db";
 import type { Bindings } from "@/lib/env";
 import { decryptSecret, encryptSecret, maskSecret } from "@/lib/secret-box";
 import { logger } from "@/lib/logger";
-import { IpaymuProvider, XenditProvider, type PaymentProvider } from "@/lib/payment";
+import { DokuProvider, IpaymuProvider, XenditProvider, type PaymentProvider } from "@/lib/payment";
 
-export type PaymentProviderName = "xendit" | "ipaymu";
+export type PaymentProviderName = "xendit" | "ipaymu" | "doku";
 export type PaymentMode = "production" | "sandbox";
 
 export type XenditSecrets = { secretKey?: string; webhookToken?: string };
 export type IpaymuSecrets = { va?: string; apiKey?: string };
-export type AccountSecrets = XenditSecrets & IpaymuSecrets;
+export type DokuSecrets = { clientId?: string; dokuSecretKey?: string };
+export type AccountSecrets = XenditSecrets & IpaymuSecrets & DokuSecrets;
 
 // Field per provider: `secret` = disamarkan di UI, sisanya tampil utuh.
 export const PROVIDER_FIELDS: Record<PaymentProviderName, { key: keyof AccountSecrets; secret: boolean; required: boolean }[]> = {
@@ -31,6 +32,12 @@ export const PROVIDER_FIELDS: Record<PaymentProviderName, { key: keyof AccountSe
   ipaymu: [
     { key: "va", secret: false, required: true },
     { key: "apiKey", secret: true, required: true },
+  ],
+  // Nama field beda dari Xendit (dokuSecretKey) supaya key salah provider
+  // tidak pernah terbaca lintas provider.
+  doku: [
+    { key: "clientId", secret: false, required: true },
+    { key: "dokuSecretKey", secret: true, required: true },
   ],
 };
 
@@ -87,6 +94,13 @@ export function buildProvider(
   }
   if (row.provider === "xendit") {
     return new XenditProvider({ secretKey: secrets.secretKey, webhookToken: secrets.webhookToken });
+  }
+  if (row.provider === "doku") {
+    return new DokuProvider({
+      clientId: secrets.clientId,
+      secretKey: secrets.dokuSecretKey,
+      mode: row.mode === "sandbox" ? "sandbox" : "production",
+    });
   }
   throw new Error(`Provider tidak dikenal: ${row.provider}`);
 }

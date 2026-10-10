@@ -25,7 +25,7 @@ export async function seedBooth(over: Partial<{ id: string; isActive: boolean; t
 // Akun pembayaran terenkripsi (format sama dengan lib/payment-accounts.ts).
 export async function seedPaymentAccount(over: {
   id?: string;
-  provider: "xendit" | "ipaymu";
+  provider: "xendit" | "ipaymu" | "doku";
   mode?: "production" | "sandbox";
   secrets: Record<string, string>;
 }) {

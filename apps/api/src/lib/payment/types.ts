@@ -1,7 +1,7 @@
 // Ported from apps/cloud/lib/payment/types.ts — unchanged. These are pure
 // type/interface declarations, nothing Node-specific to strip here.
 
-export type PaymentProviderName = "xendit" | "ipaymu";
+export type PaymentProviderName = "xendit" | "ipaymu" | "doku";
 
 export type CreateQRParams = {
   sessionId: string;
@@ -12,6 +12,8 @@ export type CreateQRParams = {
 export type CreateQRResult = {
   providerRef: string;
   qrString: string;
+  // DOKU Checkout: halaman bayar DOKU (berisi QR) yang ditampilkan kiosk.
+  paymentUrl?: string;
   expiresAt: Date;
   rawResponse: unknown;
   mockMode?: boolean;
@@ -22,6 +24,8 @@ export type WebhookEvent = "paid" | "expired" | "failed";
 export type VerifyWebhookParams = {
   headers: Record<string, string>;
   body: string;
+  // Path URL notifikasi yang diterima (DOKU: Request-Target signature).
+  path?: string;
 };
 
 export type VerifyWebhookResult = {

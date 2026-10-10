@@ -40,6 +40,8 @@ export type KioskContext = {
   sessionId: string | null;
   downloadToken: string | null;
   qrString: string | null;
+  // DOKU Checkout: halaman bayar (berisi QRIS) ditampilkan di kiosk.
+  paymentUrl: string | null;
   amount: number | null;
   expiresAt: string | null;
   /** Slot yang sedang/akan difoto (1..4). */
@@ -62,7 +64,7 @@ export type KioskEvent =
   | { type: "TAP_START" }
   | { type: "FRAME_PICKED"; frame: FrameOption }
   | { type: "CHOOSE_METHOD"; method: PaymentMethod }
-  | { type: "SESSION_CREATED"; sessionId: string; qrString: string | null; amount: number; expiresAt: string }
+  | { type: "SESSION_CREATED"; sessionId: string; qrString: string | null; paymentUrl?: string | null; amount: number; expiresAt: string }
   | { type: "BOOTH_BUSY"; releasesAt: string | null }
   | { type: "VOUCHER_WRONG" }
   | { type: "PAYMENT_PAID"; sessionId: string; downloadToken: string | null }
@@ -100,6 +102,7 @@ function emptyContext(): KioskContext {
     sessionId: null,
     downloadToken: null,
     qrString: null,
+    paymentUrl: null,
     amount: null,
     expiresAt: null,
     slot: 1,
@@ -178,7 +181,7 @@ export function reducer(m: KioskMachine, ev: KioskEvent): KioskMachine {
       return m;
 
     case "KONFIRMASI":
-      if (ev.type === "CHOOSE_METHOD") return go(ev.method === "qris" ? "PAYMENT" : "VOUCHER_INPUT", { method: ev.method, sessionId: null, qrString: null });
+      if (ev.type === "CHOOSE_METHOD") return go(ev.method === "qris" ? "PAYMENT" : "VOUCHER_INPUT", { method: ev.method, sessionId: null, qrString: null, paymentUrl: null });
       if (ev.type === "BACK") return go("PILIH_FRAME", { selectedFrame: null, voucherWrong: 0 });
       if (ev.type === "BOOTH_BUSY") return go("BOOTH_BUSY", { busyReleasesAt: ev.releasesAt });
       return m;
@@ -186,7 +189,7 @@ export function reducer(m: KioskMachine, ev: KioskEvent): KioskMachine {
     case "PAYMENT":
     case "VOUCHER_INPUT":
       if (ev.type === "SESSION_CREATED") {
-        return go(state, { sessionId: ev.sessionId, qrString: ev.qrString, amount: ev.amount, expiresAt: ev.expiresAt });
+        return go(state, { sessionId: ev.sessionId, qrString: ev.qrString, paymentUrl: ev.paymentUrl ?? null, amount: ev.amount, expiresAt: ev.expiresAt });
       }
       if (ev.type === "BOOTH_BUSY") return go("BOOTH_BUSY", { busyReleasesAt: ev.releasesAt });
       if (ev.type === "PAYMENT_PAID") {
@@ -204,7 +207,7 @@ export function reducer(m: KioskMachine, ev: KioskEvent): KioskMachine {
         }
         return go(state, { voucherWrong: n });
       }
-      if (ev.type === "BACK") return go("KONFIRMASI", { sessionId: null, qrString: null, method: null });
+      if (ev.type === "BACK") return go("KONFIRMASI", { sessionId: null, qrString: null, paymentUrl: null, method: null });
       return m;
 
     case "PEMBAYARAN_OK":

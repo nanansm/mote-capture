@@ -387,6 +387,7 @@ export class BoothDO extends DurableObject<Bindings> {
     const downloadExpiresAt = new Date(Date.now() + cfg.DOWNLOAD_LINK_EXPIRY_DAYS * 86_400_000);
 
     let qrString: string | null = null;
+    let paymentUrl: string | null = null;
     let paymentRef: string | null = null;
     let expiresAt: Date;
     let mockMode = false;
@@ -421,7 +422,8 @@ export class BoothDO extends DurableObject<Bindings> {
       }
       // PRD bagian 8 #4: QR hidup 1 menit, sama dengan PAYMENT_TIMEOUT kiosk.
       const qr = await provider.createQR({ sessionId, amount, expiresInMinutes: SESSION_TIMING.QR_EXPIRY_MINUTES });
-      qrString = qr.qrString;
+      qrString = qr.qrString || null;
+      paymentUrl = qr.paymentUrl ?? null;
       paymentRef = qr.providerRef;
       expiresAt = qr.expiresAt;
       mockMode = qr.mockMode ?? false;
@@ -466,6 +468,8 @@ export class BoothDO extends DurableObject<Bindings> {
       data: {
         sessionId,
         qrString,
+        // DOKU: kiosk menampilkan halaman bayar DOKU (berisi QRIS) di layar.
+        paymentUrl,
         amount,
         expiresAt: expiresAt.toISOString(),
         mockMode,

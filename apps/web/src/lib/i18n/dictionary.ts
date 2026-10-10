@@ -49,6 +49,7 @@ const id = {
   "kiosk.payment.providers": "GoPay, OVO, DANA, ShopeePay, BCA, semua aman",
   "kiosk.payment.waiting": "Menunggu pembayaran...",
   "kiosk.payment.expires_in": "QR berlaku {time}",
+  "kiosk.payment.doku_fallback": "Halaman bayar belum tampil. Scan kode ini pakai HP untuk membuka QRIS.",
   "kiosk.payment.expired": "QR sudah kadaluarsa, silakan ulangi.",
   "kiosk.payment.mock": "Mode mock — Xendit belum dikonfigurasi.",
 
@@ -180,6 +181,7 @@ const en: typeof id = {
   "kiosk.payment.providers": "GoPay, OVO, DANA, ShopeePay, BCA, all supported",
   "kiosk.payment.waiting": "Waiting for payment...",
   "kiosk.payment.expires_in": "QR valid for {time}",
+  "kiosk.payment.doku_fallback": "Payment page not loading. Scan this code with your phone to open QRIS.",
   "kiosk.payment.expired": "QR expired, please try again.",
   "kiosk.payment.mock": "Mock mode — Xendit not configured.",
 

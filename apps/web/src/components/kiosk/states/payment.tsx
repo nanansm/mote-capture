@@ -16,6 +16,7 @@ const IS_DEV = import.meta.env.DEV;
 export function PaymentState({
   sessionId,
   qrString,
+  paymentUrl,
   amount,
   expiresAt,
   onCancel,
@@ -23,6 +24,7 @@ export function PaymentState({
 }: {
   sessionId?: string;
   qrString?: string;
+  paymentUrl?: string;
   amount?: number;
   expiresAt?: string;
   onCancel: () => void;
@@ -32,9 +34,12 @@ export function PaymentState({
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    if (!qrString) return;
+    // DOKU: QR cadangan berisi link halaman bayar (dibuka di HP pelanggan
+    // kalau halaman DOKU gagal tampil di layar kiosk).
+    const content = qrString || paymentUrl;
+    if (!content) return;
     let active = true;
-    QRCode.toDataURL(qrString, { errorCorrectionLevel: "M", margin: 2, width: 480 })
+    QRCode.toDataURL(content, { errorCorrectionLevel: "M", margin: 2, width: 480 })
       .then((url) => {
         if (active) setQrDataUrl(url);
       })
@@ -42,7 +47,7 @@ export function PaymentState({
     return () => {
       active = false;
     };
-  }, [qrString]);
+  }, [qrString, paymentUrl]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -88,7 +93,9 @@ export function PaymentState({
             animate={{ opacity: 1, scale: 1 }}
             className="mx-auto rounded-3xl bg-white p-6 shadow-2xl"
           >
-            {qrDataUrl ? (
+            {paymentUrl ? (
+              <DokuCheckoutFrame url={paymentUrl} fallbackQr={qrDataUrl} t={t} />
+            ) : qrDataUrl ? (
               <img
                 data-testid="payment-qr"
                 src={qrDataUrl}
@@ -129,6 +136,44 @@ export function PaymentState({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Halaman bayar DOKU (berisi QRIS) di dalam layar kiosk. Kalau tidak termuat
+// dalam 12 detik, tampilkan QR berisi link-nya supaya pelanggan buka di HP.
+function DokuCheckoutFrame({ url, fallbackQr, t }: { url: string; fallbackQr: string | null; t: T }) {
+  const [loaded, setLoaded] = useState(false);
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    setLoaded(false);
+    setSlow(false);
+    const id = setTimeout(() => setSlow(true), 12_000);
+    return () => clearTimeout(id);
+  }, [url]);
+  return (
+    <div className="relative h-[560px] w-[440px] max-w-full overflow-hidden rounded-2xl">
+      <iframe
+        data-testid="payment-doku-frame"
+        src={url}
+        title="DOKU QRIS"
+        onLoad={() => setLoaded(true)}
+        className="h-full w-full border-0"
+        referrerPolicy="no-referrer"
+        sandbox="allow-scripts allow-same-origin allow-forms"
+      />
+      {!loaded ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-white text-brand-green-dark">
+          {slow && fallbackQr ? (
+            <>
+              <img data-testid="payment-doku-fallback" src={fallbackQr} alt="Link pembayaran" className="h-[300px] w-[300px]" />
+              <p className="max-w-xs text-center text-base font-semibold">{t("kiosk.payment.doku_fallback")}</p>
+            </>
+          ) : (
+            <Loader2 className="h-10 w-10 animate-spin" />
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

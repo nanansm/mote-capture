@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { del, get, patch, post } from "@/lib/api";
 
-export type ProviderName = "xendit" | "ipaymu";
+export type ProviderName = "xendit" | "ipaymu" | "doku";
 export type Mode = "production" | "sandbox";
 
 export type PaymentAccount = {
@@ -94,7 +94,37 @@ const PROVIDERS: Record<
       },
     ],
   },
+  doku: {
+    label: "DOKU",
+    dashboard: "https://dashboard.doku.com",
+    fields: [
+      {
+        key: "clientId",
+        label: "Client ID",
+        secret: false,
+        placeholder: "BRN-0000-0000000000000",
+        hint: "Back Office DOKU → Integrations → API Keys. Sandbox dan production beda Client ID.",
+      },
+      {
+        key: "dokuSecretKey",
+        label: "Active Secret Key",
+        secret: true,
+        placeholder: "SK-…",
+        hint: "Di halaman yang sama, kolom Active Secret Key (diawali SK-). Bukan RSA key.",
+      },
+    ],
+  },
 };
+
+// Back Office DOKU beda alamat untuk sandbox dan production.
+const DOKU_DASHBOARD: Record<Mode, string> = {
+  production: "https://dashboard.doku.com/bo/login",
+  sandbox: "https://sandbox.doku.com/bo/login",
+};
+
+function dashboardUrl(a: Pick<PaymentAccount, "provider" | "mode">) {
+  return a.provider === "doku" ? DOKU_DASHBOARD[a.mode] : PROVIDERS[a.provider].dashboard;
+}
 
 export const providerLabel = (p: ProviderName) => PROVIDERS[p]?.label ?? p;
 
@@ -193,7 +223,13 @@ function AccountDialog({
             mode,
             secrets: trimmed,
           });
-      toast.success(editing ? "Akun diperbarui" : "Akun dibuat. Klik Tes koneksi untuk memastikan.");
+      toast.success(
+        editing
+          ? "Akun diperbarui"
+          : provider === "doku"
+            ? "Akun dibuat. Salin Notification URL di kartu akun ke Back Office DOKU, lalu klik Tes koneksi."
+            : "Akun dibuat. Klik Tes koneksi untuk memastikan.",
+      );
       onSaved(res.data);
       onOpenChange(false);
     } catch (err) {
@@ -221,14 +257,14 @@ function AccountDialog({
               id="acc-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="contoh: iPaymu smnanan, Xendit Maja"
+              placeholder="contoh: iPaymu smnanan, DOKU Maja"
               maxLength={80}
             />
           </div>
 
           <div className="grid gap-2">
             <Label>Provider</Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {(Object.keys(PROVIDERS) as ProviderName[]).map((p) => (
                 <Button
                   key={p}
@@ -244,6 +280,12 @@ function AccountDialog({
                 </Button>
               ))}
             </div>
+            {provider === "doku" && !editing ? (
+              <p className="text-xs text-muted-foreground">
+                Setelah disimpan, kartu akun menampilkan <b>Notification URL</b>. Tempel URL itu di Back Office DOKU
+                supaya pembayaran langsung terdeteksi.
+              </p>
+            ) : null}
             {editing ? (
               <p className="text-xs text-muted-foreground">
                 Provider tidak bisa diganti. Buat akun baru kalau mau pindah provider.
@@ -410,6 +452,34 @@ function AccountCard({
             </p>
             <CopyBox value={account.webhookUrl} />
           </div>
+        ) : account.provider === "doku" ? (
+          <div className="space-y-2 rounded-md border border-dashed p-3 text-xs" data-testid="doku-notify">
+            <p className="font-medium">Wajib sekali: pasang Notification URL di DOKU</p>
+            <ol className="list-decimal space-y-1 pl-4">
+              <li>
+                Buka{" "}
+                <a className="underline" href={dashboardUrl(account)} target="_blank" rel="noreferrer">
+                  Back Office DOKU {account.mode === "sandbox" ? "Sandbox" : "Production"}
+                </a>
+                , menu <b>Settings → Payment Settings</b>, pilih <b>QRIS</b>.
+              </li>
+              <li>Salin URL di bawah, tempel di kolom <b>Notification URL</b>, lalu Simpan.</li>
+              <li>
+                Kembali ke sini, klik <b>Tes koneksi</b> sampai status <b>Terhubung</b>.
+              </li>
+            </ol>
+            <CopyBox value={account.webhookUrl} />
+            {!account.webhookUrl.startsWith("https://") ? (
+              <p className="rounded bg-amber-50 p-2 text-amber-900">
+                Alamat ini belum HTTPS publik, jadi DOKU tidak bisa mengirim notifikasi ke sini. Normal di mode uji
+                lokal; di server asli alamatnya otomatis jadi https://capture.motekreatif.com/...
+              </p>
+            ) : null}
+            <p className="text-muted-foreground">
+              Pelanggan bayar lewat halaman QRIS DOKU yang tampil di layar booth. Status bayar selalu dicek ulang ke
+              DOKU sebelum sesi foto dibuka.
+            </p>
+          </div>
         ) : (
           <p className="text-xs text-muted-foreground">
             iPaymu tidak perlu daftar webhook. Alamat notifikasi dikirim otomatis tiap QR dibuat, dan status bayar
@@ -427,7 +497,7 @@ function AccountCard({
             Edit
           </Button>
           <Button size="sm" variant="ghost" asChild>
-            <a href={PROVIDERS[account.provider].dashboard} target="_blank" rel="noreferrer">
+            <a href={dashboardUrl(account)} target="_blank" rel="noreferrer">
               <ExternalLink className="h-4 w-4" />
               Dashboard {providerLabel(account.provider)}
             </a>
@@ -444,8 +514,13 @@ function AccountCard({
 
 // ---- Halaman ---------------------------------------------------------------
 
-export function PaymentAccountsManager() {
-  const { accounts, encryptionConfigured, reload } = usePaymentAccounts();
+export function PaymentAccountsManager({ onChange }: { onChange?: () => void } = {}) {
+  const { accounts, encryptionConfigured, reload: reloadOwn } = usePaymentAccounts();
+  // Badge ringkasan di halaman Settings memakai hook terpisah; ikut di-refresh.
+  const reload = useCallback(() => {
+    onChange?.();
+    return reloadOwn();
+  }, [onChange, reloadOwn]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<PaymentAccount | null>(null);
 
@@ -456,7 +531,7 @@ export function PaymentAccountsManager() {
         <div className="space-y-2 pt-2">
           <ol className="list-decimal space-y-1 pl-5">
             <li>
-              <b>Tambah akun</b>: pilih Xendit atau iPaymu, tempel key dari dashboard provider.
+              <b>Tambah akun</b>: pilih Xendit, iPaymu, atau DOKU, tempel key dari dashboard provider.
             </li>
             <li>
               Klik <b>Tes koneksi</b> sampai status <b>Terhubung</b>.

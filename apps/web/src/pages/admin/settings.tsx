@@ -50,7 +50,7 @@ export default function SettingsPage() {
     void load();
   }, [load]);
 
-  const { accounts } = usePaymentAccounts();
+  const { accounts, reload: reloadAccounts } = usePaymentAccounts();
   const connected = (accounts ?? []).filter((a) => a.lastTest?.ok).length;
 
   const waConfigured = Boolean(
@@ -74,7 +74,7 @@ export default function SettingsPage() {
         id="payment"
         icon={<CreditCard className="h-5 w-5" />}
         title="Pembayaran QRIS"
-        summary="Akun Xendit / iPaymu. Tiap booth memilih satu akun di tab Info & Pembayaran."
+        summary="Akun Xendit / iPaymu / DOKU. Tiap booth memilih satu akun di tab Info & Pembayaran."
         status={
           accounts === null ? null : accounts.length === 0 ? (
             <Badge variant="warn">Belum ada akun</Badge>
@@ -86,7 +86,7 @@ export default function SettingsPage() {
         }
         defaultOpen={initialOpen === "payment"}
       >
-        <PaymentAccountsManager />
+        <PaymentAccountsManager onChange={reloadAccounts} />
         <p className="pt-3 text-sm">
           <Link to="/admin/payments/transactions" className="text-brand-green-dark underline">
             Lihat riwayat transaksi →

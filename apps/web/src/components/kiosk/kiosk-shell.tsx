@@ -254,7 +254,7 @@ export function KioskShell(props: Props) {
       setBusy(true);
       dispatch({ type: "CHOOSE_METHOD", method });
       try {
-        const data = await wsRequest<{ sessionId: string; qrString: string | null; amount: number; expiresAt: string }>(
+        const data = await wsRequest<{ sessionId: string; qrString: string | null; paymentUrl?: string | null; amount: number; expiresAt: string }>(
           SocketEvents.CONFIRM_AND_PAY,
           { boothId: props.boothId, frameId: frame.id, method },
         );
@@ -484,6 +484,7 @@ export function KioskShell(props: Props) {
         <PaymentState
           sessionId={context.sessionId ?? undefined}
           qrString={context.qrString ?? undefined}
+          paymentUrl={context.paymentUrl ?? undefined}
           amount={context.amount ?? undefined}
           expiresAt={context.expiresAt ?? undefined}
           onCancel={backFromPayment}

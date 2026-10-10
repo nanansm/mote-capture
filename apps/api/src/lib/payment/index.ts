@@ -6,3 +6,5 @@ export { XenditProvider } from "./xendit";
 export type { XenditCredentials } from "./xendit";
 export { IpaymuProvider } from "./ipaymu";
 export type { IpaymuCredentials } from "./ipaymu";
+export { DokuProvider } from "./doku";
+export type { DokuCredentials } from "./doku";
